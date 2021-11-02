@@ -13,8 +13,13 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+#define PORT 9453
 #define PET_SIZE 1000
 #define MAX_LENGTH 15000
+
 using namespace std;
 
 void callPrintenv(string envVar);
@@ -45,13 +50,60 @@ int main(int argc, char *argv[]) {
 	bool bothStderr = false;
 	int pipeAfterLine =0 ;
 
+	// Socket setting
+	int masterSocket,slaveSocket,clientLen,readStatus,writeStatus ;
+	struct sockaddr_in clientAddr , serverAddr;
+	char buffer[MAX_LENGTH] ={} ;
+	bool bReuseAddr= true;
+
 	// Pipe expired table initialization.
 	PET_init(pipe_expired_table);
 
 	// set $PATH to bin/ ./ initially
 	callSetenv("PATH","bin:.");
 	cout <<"% ";  
- 
+
+	// Master socket setting 
+	if((masterSocket = socket(AF_INET,SOCK_STREAM,0))<0){
+		cerr << "master socket create Fail\n";	
+	}
+	bzero(&serverAddr,sizeof(serverAddr));
+	serverAddr.sin_family = AF_INET ;
+	serverAddr.sin_addr.s_addr =htonl(INADDR_ANY);
+	serverAddr.sin_port = htons(PORT);
+	
+	setsockopt(masterSocket,SOL_SOCKET,SO_REUSEADDR,(const char*)&bReuseAddr,sizeof(bool));
+
+	if(bind(masterSocket,(struct sockaddr *)&serverAddr,sizeof(serverAddr))<0){
+		cerr <<"master socket bind Fail\n" ;
+	}
+	
+	cout <<"Server is listening...\n";
+	listen(masterSocket,3);
+
+	while(true){
+		clientLen = sizeof(clientAddr);	
+		slaveSocket = accept(masterSocket,(struct sockaddr *)&clientAddr,(socklen_t *)&clientLen);
+		if(slaveSocket <0){
+			cerr <<"server accept error\n";
+		}else{
+			// socket connect success.
+			cout <<"slaveSocket created Success\n";
+			// keep read data and echo.
+			while(readStatus = read(slaveSocket,buffer,sizeof(buffer))){
+				cout <<"Server got something and echo\n" ;
+				if(readStatus <0){
+					cerr <<"readStatus < 0\n";
+				}
+				if(send(slaveSocket,buffer,sizeof(buffer),0) <0){
+					cerr <<"Server send to socket fail.\n";
+				}
+			}
+			// connection Done -> close socket.
+			close(slaveSocket);
+		}
+	}
+
 	while(getline(cin,input)){
 		// Flag initialization
 		hasNumberPipe = false;
