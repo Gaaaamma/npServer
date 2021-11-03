@@ -16,7 +16,6 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-#define PORT 9453
 #define PET_SIZE 1000
 #define MAX_LENGTH 15000
 
@@ -55,6 +54,7 @@ int main(int argc, char *argv[]) {
 	struct sockaddr_in clientAddr , serverAddr;
 	char buffer[MAX_LENGTH] ={} ;
 	bool bReuseAddr= true;
+	int port = stoi(argv[1]); 
 
 	// Pipe expired table initialization.
 	PET_init(pipe_expired_table);
@@ -70,7 +70,7 @@ int main(int argc, char *argv[]) {
 	bzero(&serverAddr,sizeof(serverAddr));
 	serverAddr.sin_family = AF_INET ;
 	serverAddr.sin_addr.s_addr =htonl(INADDR_ANY);
-	serverAddr.sin_port = htons(PORT);
+	serverAddr.sin_port = htons(port);
 	
 	setsockopt(masterSocket,SOL_SOCKET,SO_REUSEADDR,(const char*)&bReuseAddr,sizeof(bool));
 
