@@ -34,6 +34,8 @@ int PET_emptyPipeIndex(int pipe_expired_table[PET_SIZE]);
 vector<int> PET_existPipe(int pipe_expired_table[PET_SIZE]);
 void wait4children(int signo);
 
+string extractClientInput(char buffer[MAX_LENGTH],int readCount);
+
 int main(int argc, char *argv[]) {
 	string input ="" ; 
 	string aWord ="" ;
@@ -50,9 +52,10 @@ int main(int argc, char *argv[]) {
 	int pipeAfterLine =0 ;
 
 	// Socket setting
-	int masterSocket,slaveSocket,clientLen,readStatus,writeStatus ;
+	int masterSocket,slaveSocket,clientLen,readCount ;
 	struct sockaddr_in clientAddr , serverAddr;
 	char buffer[MAX_LENGTH] ={} ;
+	char promptBuffer[3] ={'%',' ','\0'};
 	bool bReuseAddr= true;
 	int port = stoi(argv[1]); 
 
@@ -61,7 +64,6 @@ int main(int argc, char *argv[]) {
 
 	// set $PATH to bin/ ./ initially
 	callSetenv("PATH","bin:.");
-	cout <<"% ";  
 
 	// Master socket setting 
 	if((masterSocket = socket(AF_INET,SOCK_STREAM,0))<0){
@@ -79,7 +81,7 @@ int main(int argc, char *argv[]) {
 	}
 	
 	cout <<"Server is listening...\n";
-	listen(masterSocket,3);
+	listen(masterSocket,50);
 
 	while(true){
 		clientLen = sizeof(clientAddr);	
@@ -88,19 +90,33 @@ int main(int argc, char *argv[]) {
 			cerr <<"server accept error\n";
 		}else{
 			// socket connect success.
+			int sockForkPid;
 			cout <<"slaveSocket created Success\n";
-			// keep read data and echo.
-			while(readStatus = read(slaveSocket,buffer,sizeof(buffer))){
-				cout <<"Server got something and echo\n" ;
-				if(readStatus <0){
-					cerr <<"readStatus < 0\n";
+			if((sockForkPid = fork()) < 0){  // fork error
+				cerr << "fork error\n";
+			}else if(sockForkPid ==0){ //Child Process
+				close(masterSocket);
+				// Write the first prompt
+				if(write(slaveSocket,promptBuffer,2)<0){
+					cerr << "First prompt fail\n";
 				}
-				if(send(slaveSocket,buffer,sizeof(buffer),0) <0){
-					cerr <<"Server send to socket fail.\n";
+
+				//Start to handle client message ;
+				while(readCount = read(slaveSocket,buffer,sizeof(buffer))){
+					input = extractClientInput(buffer,readCount);
+					cout <<"Server get message: "<<input<<"\n";
+					if(readCount <0){
+						cerr << "readCount <0 \n";
+					}
+					if(write(slaveSocket,buffer,readCount)<0){
+						cerr << "write Fail \n";
+					}
 				}
+				exit(0) ;
+			}else if(sockForkPid > 0){ //Parent Process
+				signal(SIGCHLD,wait4children);
+				close(slaveSocket);
 			}
-			// connection Done -> close socket.
-			close(slaveSocket);
 		}
 	}
 
@@ -686,4 +702,12 @@ void callSetenv(string envVar,string value){
 void wait4children(int signo){
 	int status;
 	while(waitpid(-1,&status,WNOHANG)>0);
+}
+string extractClientInput(char buffer[MAX_LENGTH],int readCount){
+	string result ="" ;
+	
+	for(int i=0;i<readCount-2;i++){
+		result += buffer[i] ;
+	}
+	return result; 
 }
