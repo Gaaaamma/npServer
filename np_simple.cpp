@@ -756,7 +756,10 @@ void wait4children(int signo){
 string extractClientInput(char buffer[MAX_LENGTH],int readCount){
 	string result ="" ;
 	
-	for(int i=0;i<readCount-2;i++){
+	for(int i=0;i<readCount;i++){
+		if(buffer[i]=='\n' || buffer[i]=='\r' || buffer[i]=='\0'){
+			break ;
+		}
 		result += buffer[i] ;
 	}
 	return result; 
