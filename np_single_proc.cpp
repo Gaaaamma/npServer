@@ -108,9 +108,9 @@ int main(int argc, char *argv[]) {
 
 	while(1){
 		memcpy(&rfds,&afds,sizeof(rfds));
-		cout << "(b)\n";
+		dbug(111);
 		rtnVal = select(nfdp,&rfds,(fd_set *)0,(fd_set *)0,(struct timeval *)0);
-		cout << "(a)\n";
+		dbug(113);
 		if(rtnVal <0){
 			cerr << "rtnVal <0 : select(...) error\n" ;
 		}else if(rtnVal >0){
@@ -118,112 +118,113 @@ int main(int argc, char *argv[]) {
 			// first check master Socket
 			if(FD_ISSET(masterSocket,&rfds)){
 				//  client want to connect to Server
-				cout <<"FD_ISSET(master,&rfds) inside\n";
 				int emptyIndex = SST_findEmpty(slaveSocketTable);
 				clientLen = sizeof(clientAddr);
-				cout <<"(1)\n";
 				slaveSocketTable[emptyIndex] = accept(masterSocket,(struct sockaddr *)&clientAddr,(socklen_t *)&clientLen);
-				cout <<"(2)\n";
+				// Check clientAddr
+				cout << "IP: " <<clientAddr.sin_addr.s_addr << " port: "<< clientAddr.sin_port <<".\n"; 
 				if(slaveSocketTable[emptyIndex] <0){
 					cerr << "slaveSocket Accept error\n";
 				}else{
 					// slave socket create Success -> add it to afds
-					cout << "(3)\n";
 					FD_SET(slaveSocketTable[emptyIndex],&afds);
-					cout << "(4)\n";
 				}
 			}
-
+			dbug(131);
 			// Second check slave socket
 			vector<int> existSocketIndex = SST_existSocket(slaveSocketTable);
 			for(int i=0;i<existSocketIndex.size();i++){
-				cout << "(5)\n";
 				if(FD_ISSET(slaveSocketTable[existSocketIndex[i]],&rfds)){
-					cout <<"(6)\n";
 					// get some message from slave Socket.
-					// Testing
 					readCount = read(slaveSocketTable[existSocketIndex[i]],buffer,sizeof(buffer));
+					dbug(138);
 					if(readCount ==0){
 						// readCount ==0 means socket close. -> Handle it.
+						// yell to everyone you leave
+
 						// rm afds / close Socket  / reset slaveSocketTable
+						cout << "User: " << slaveSocketTable[existSocketIndex[i]] << " just leave\n";
+						
 						FD_CLR(slaveSocketTable[existSocketIndex[i]],&afds);
 						close(slaveSocketTable[existSocketIndex[i]]);
 						slaveSocketTable[existSocketIndex[i]] = -1 ;
 
 					}else{	
-						string temp = extractClientInput(buffer,readCount);
-						cout << "Message from:" << slaveSocketTable[existSocketIndex[i]] <<"=" << temp <<"\n";
+						input = extractClientInput(buffer,readCount);
+						cout << "Message from:" << slaveSocketTable[existSocketIndex[i]] <<"=" << input <<"\n";
+
+						// Now we got input from client -> handle the message.
+						// Flag initialization
+						hasNumberPipe = false;
+						bothStderr = false;
+						pipeAfterLine =0 ;
+				
+						ss << input ;
+				    	while (ss >> aWord) {
+							commandVec.push_back(aWord);
+						}
+						// each round except for empty command  -> PET_iterate() 
+						if(commandVec.size()!=0){
+							PET_iterate(pipe_expired_table);
+						}
+				
+						// We want to check if the command is the three built-in command
+						if(commandVec.size()!=0 && commandVec[0]=="exit"){
+							// yell to everyone you leave
+						
+							// client want to exit ->  rm afds / close Socket / reset slaveSocketTable.
+							FD_CLR(slaveSocketTable[existSocketIndex[i]],&afds);
+							close(slaveSocketTable[existSocketIndex[i]]);
+							slaveSocketTable[existSocketIndex[i]] = -1;
+						}else if(commandVec.size()!=0 && commandVec[0]=="printenv"){
+							if(commandVec.size()==2){
+								callPrintenv(commandVec[1]);     
+							} 
+						}else if(commandVec.size()!=0 && commandVec[0]=="setenv"){
+							if(commandVec.size()==3){
+								callSetenv(commandVec[1],commandVec[2]);    
+							}
+						}else if(commandVec.size()!=0){ // The last condition is not empty.
+							// Not the three built-in command
+							// Ready to handle the command. 
+				
+							// We want to know how much process need to call fork()
+							// And check if there is number pipe -> flag on.
+				      		int process_count =1 ;
+				      		for(int i=0;i<commandVec.size();i++){
+				        		if(commandVec[i].find("|")!= string::npos){ //Really find '|' in this element
+				          			if(commandVec[i].length()==1){ // '|' Pipe only
+				            			process_count ++ ;
+				          			}else{ // it is number pipe
+										// hasNumberPipe flag on and set the pipeAfterLine
+										hasNumberPipe = true ;
+										pipeAfterLine = stoi(commandVec[i].substr(1));
+				          			}
+				        		}else if(commandVec[i].find("!")!= string::npos){//find '!' in this element
+				      				hasNumberPipe = true;
+									bothStderr = true;
+									pipeAfterLine = stoi(commandVec[i].substr(1)) ;
+								}
+							} 
+							
+							// Now we have the number of processes 
+							// we can start to construct the pipe.
+							if(process_count ==1){
+								singleProcess(commandVec,hasNumberPipe,bothStderr,pipeAfterLine,numberPipe,pipe_expired_table);	
+							}else if(process_count>=2){
+								multiProcess(commandVec,process_count,hasNumberPipe,bothStderr,pipeAfterLine,numberPipe,pipe_expired_table);	
+							}		
+						}
+				
+						//one term command is done -> Initialize it.
+						commandVec.clear();
+						ss.str("");
+						ss.clear();
 					}
 				}
 			}
 		}
 	} 
-
-	while(getline(cin,input)){
-		// Flag initialization
-		hasNumberPipe = false;
-		bothStderr = false;
-		pipeAfterLine =0 ;
-
-		ss << input ;
-    	while (ss >> aWord) {
-			commandVec.push_back(aWord);
-		}
-		// each round except for empty command  -> PET_iterate() 
-		if(commandVec.size()!=0){
-			PET_iterate(pipe_expired_table);
-		}
-
-		// We want to check if the command is the three built-in command
-		if(commandVec.size()!=0 && commandVec[0]=="exit"){
-			break ;
-		}else if(commandVec.size()!=0 && commandVec[0]=="printenv"){
-			if(commandVec.size()==2){
-				callPrintenv(commandVec[1]);     
-			} 
-		}else if(commandVec.size()!=0 && commandVec[0]=="setenv"){
-			if(commandVec.size()==3){
-				callSetenv(commandVec[1],commandVec[2]);    
-			}
-		}else if(commandVec.size()!=0){ // The last condition is not empty.
-			// Not the three built-in command
-			// Ready to handle the command. 
-
-			// We want to know how much process need to call fork()
-			// And check if there is number pipe -> flag on.
-      		int process_count =1 ;
-      		for(int i=0;i<commandVec.size();i++){
-        		if(commandVec[i].find("|")!= string::npos){ //Really find '|' in this element
-          			if(commandVec[i].length()==1){ // '|' Pipe only
-            			process_count ++ ;
-          			}else{ // it is number pipe
-						// hasNumberPipe flag on and set the pipeAfterLine
-						hasNumberPipe = true ;
-						pipeAfterLine = stoi(commandVec[i].substr(1));
-          			}
-        		}else if(commandVec[i].find("!")!= string::npos){//find '!' in this element
-      				hasNumberPipe = true;
-					bothStderr = true;
-					pipeAfterLine = stoi(commandVec[i].substr(1)) ;
-				}
-			} 
-			
-			// Now we have the number of processes 
-			// we can start to construct the pipe.
-			if(process_count ==1){
-				singleProcess(commandVec,hasNumberPipe,bothStderr,pipeAfterLine,numberPipe,pipe_expired_table);	
-			}else if(process_count>=2){
-				multiProcess(commandVec,process_count,hasNumberPipe,bothStderr,pipeAfterLine,numberPipe,pipe_expired_table);	
-			}		
-		}
-
-		//one term command is done -> Initialize it.
-		commandVec.clear();
-		ss.str("");
-		ss.clear();
-		cout <<"% ";
-	}
-
 	return 0;
 }
 // Single process handle 
