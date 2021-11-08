@@ -13,8 +13,14 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+#include <sys/select.h>
+
 #define PET_SIZE 1000
 #define MAX_LENGTH 15000
+#define SSOCKET_TABLE_SIZE 30
 using namespace std;
 
 void callPrintenv(string envVar);
@@ -29,6 +35,14 @@ int PET_findSameLine(int pipe_expired_table[PET_SIZE],int target_line);
 int PET_emptyPipeIndex(int pipe_expired_table[PET_SIZE]);
 vector<int> PET_existPipe(int pipe_expired_table[PET_SIZE]);
 void wait4children(int signo);
+
+void SST_init(int slaveSocketTable[SSOCKET_TABLE_SIZE]);
+int SST_findEmpty(int slaveSocketTable[SSOCKET_TABLE_SIZE]);
+int SST_count(int slaveSocketTable[SSOCKET_TABLE_SIZE]);
+vector<int> SST_existSocket(int slaveSocketTable[SSOCKET_TABLE_SIZE]);
+string extractClientInput(char buffer[MAX_LENGTH],int readCount);
+
+void dbug(int line);
 
 int main(int argc, char *argv[]) {
 	string input ="" ; 
@@ -45,13 +59,106 @@ int main(int argc, char *argv[]) {
 	bool bothStderr = false;
 	int pipeAfterLine =0 ;
 
+	// Socket setting
+	int masterSocket,clientLen,readCount ;
+	struct sockaddr_in clientAddr , serverAddr;
+	char buffer[MAX_LENGTH] ={} ;
+	char promptBuffer[3] ={'%',' ','\0'};
+	bool bReuseAddr= true;
+	int port = stoi(argv[1]); 
+
+	// select setting
+	int rtnVal ;
+	int slaveSocketTable[SSOCKET_TABLE_SIZE] ;
+	fd_set rfds,afds ;
+	int nfdp = getdtablesize();
+	FD_ZERO(&rfds);
+	FD_ZERO(&afds);	
+
+	// Master socket setting 
+	if((masterSocket = socket(AF_INET,SOCK_STREAM,0))<0){
+		cerr << "master socket create Fail\n";
+		exit(0);
+	}else{
+		// We add master Socket to afds
+		FD_SET(masterSocket,&afds);
+	}
+	bzero(&serverAddr,sizeof(serverAddr));
+	serverAddr.sin_family = AF_INET ;
+	serverAddr.sin_addr.s_addr =htonl(INADDR_ANY);
+	serverAddr.sin_port = htons(port);
+	
+	setsockopt(masterSocket,SOL_SOCKET,SO_REUSEADDR,(const char*)&bReuseAddr,sizeof(bool));
+
+	if(bind(masterSocket,(struct sockaddr *)&serverAddr,sizeof(serverAddr))<0){
+		cerr <<"master socket bind Fail\n" ;
+		exit(0);
+	}
+	cout <<"Server is listening...\n";
+	listen(masterSocket,50);
+
 	// Pipe expired table initialization.
 	PET_init(pipe_expired_table);
 
 	// set $PATH to bin/ ./ initially
 	callSetenv("PATH","bin:.");
-	cout <<"% ";  
- 
+
+	// slaveSocketTable initialization
+	SST_init(slaveSocketTable);
+
+	while(1){
+		memcpy(&rfds,&afds,sizeof(rfds));
+		cout << "(b)\n";
+		rtnVal = select(nfdp,&rfds,(fd_set *)0,(fd_set *)0,(struct timeval *)0);
+		cout << "(a)\n";
+		if(rtnVal <0){
+			cerr << "rtnVal <0 : select(...) error\n" ;
+		}else if(rtnVal >0){
+			// rntVal > 0 We need to check which socket need to transfer data.
+			// first check master Socket
+			if(FD_ISSET(masterSocket,&rfds)){
+				//  client want to connect to Server
+				cout <<"FD_ISSET(master,&rfds) inside\n";
+				int emptyIndex = SST_findEmpty(slaveSocketTable);
+				clientLen = sizeof(clientAddr);
+				cout <<"(1)\n";
+				slaveSocketTable[emptyIndex] = accept(masterSocket,(struct sockaddr *)&clientAddr,(socklen_t *)&clientLen);
+				cout <<"(2)\n";
+				if(slaveSocketTable[emptyIndex] <0){
+					cerr << "slaveSocket Accept error\n";
+				}else{
+					// slave socket create Success -> add it to afds
+					cout << "(3)\n";
+					FD_SET(slaveSocketTable[emptyIndex],&afds);
+					cout << "(4)\n";
+				}
+			}
+
+			// Second check slave socket
+			vector<int> existSocketIndex = SST_existSocket(slaveSocketTable);
+			for(int i=0;i<existSocketIndex.size();i++){
+				cout << "(5)\n";
+				if(FD_ISSET(slaveSocketTable[existSocketIndex[i]],&rfds)){
+					cout <<"(6)\n";
+					// get some message from slave Socket.
+					// Testing
+					readCount = read(slaveSocketTable[existSocketIndex[i]],buffer,sizeof(buffer));
+					if(readCount ==0){
+						// readCount ==0 means socket close. -> Handle it.
+						// rm afds / close Socket  / reset slaveSocketTable
+						FD_CLR(slaveSocketTable[existSocketIndex[i]],&afds);
+						close(slaveSocketTable[existSocketIndex[i]]);
+						slaveSocketTable[existSocketIndex[i]] = -1 ;
+
+					}else{	
+						string temp = extractClientInput(buffer,readCount);
+						cout << "Message from:" << slaveSocketTable[existSocketIndex[i]] <<"=" << temp <<"\n";
+					}
+				}
+			}
+		}
+	} 
+
 	while(getline(cin,input)){
 		// Flag initialization
 		hasNumberPipe = false;
@@ -634,4 +741,55 @@ void callSetenv(string envVar,string value){
 void wait4children(int signo){
 	int status;
 	while(waitpid(-1,&status,WNOHANG)>0);
+}
+
+// slaveSocketTable Functions
+void SST_init(int slaveSocketTable[SSOCKET_TABLE_SIZE]){
+	for(int i=0;i<SSOCKET_TABLE_SIZE;i++){
+		slaveSocketTable[i] =-1 ;		
+	}
+}
+
+int SST_findEmpty(int slaveSocketTable[SSOCKET_TABLE_SIZE]){
+	int result =-1;
+	for(int i=0;i<SSOCKET_TABLE_SIZE;i++){
+		if(slaveSocketTable[i] ==-1){
+			result = i ;
+			break ;
+		}
+	}
+	return result ;
+}
+
+int SST_count(int slaveSocketTable[SSOCKET_TABLE_SIZE]){
+	int result =0 ;
+	for(int i=0;i<SSOCKET_TABLE_SIZE;i++){
+		if(slaveSocketTable[i] != -1){
+			result ++ ;	
+		}
+	}
+	return result ;
+}
+vector<int> SST_existSocket(int slaveSocketTable[SSOCKET_TABLE_SIZE]){
+	vector<int> result ;
+	for(int i=0;i<SSOCKET_TABLE_SIZE;i++){
+		if(slaveSocketTable[i] != -1){
+			result.push_back(i);		
+		}
+	}
+	return result;
+}
+string extractClientInput(char buffer[MAX_LENGTH],int readCount){
+	string result ="";
+
+	for(int i=0;i<readCount;i++){
+		if(buffer[i]== '\n' || buffer[i] =='\r' || buffer[i] =='\0'){
+			break;			
+		}
+		result += buffer[i];
+	}
+	return result;
+}
+void dbug(int line){
+	cout << "line: " << line <<"\n";
 }
