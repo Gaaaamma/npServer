@@ -89,8 +89,8 @@ public:
 
 void callPrintenv(string envVar,User user);
 void callSetenv(string envVar,string value);
-void singleProcess(vector<string>commandVec,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE]);
-void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE]);
+void singleProcess(vector<string>commandVec,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],User user);
+void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],User user);
 
 void wait4children(int signo);
 
@@ -241,7 +241,7 @@ int main(int argc, char *argv[]) {
 							commandVec.push_back(aWord);
 						}
 						// each round except for empty command  -> PET_iterate() 
-						if(commandVec.size()!=0){
+						if(commandVec.size()!=0 && commandVec[0] != "exit"){
 							PET_iterate(users[existUsersIndex[i]].pipe_expired_table);
 						}
 				
@@ -297,9 +297,9 @@ int main(int argc, char *argv[]) {
 							// Now we have the number of processes 
 							// we can start to construct the pipe.
 							if(process_count ==1){
-								singleProcess(commandVec,hasNumberPipe,bothStderr,pipeAfterLine,users[existUsersIndex[i]].numberPipe,users[existUsersIndex[i]].pipe_expired_table);	
+								singleProcess(commandVec,hasNumberPipe,bothStderr,pipeAfterLine,users[existUsersIndex[i]].numberPipe,users[existUsersIndex[i]].pipe_expired_table,users[existUsersIndex[i]]);	
 							}else if(process_count>=2){
-								multiProcess(commandVec,process_count,hasNumberPipe,bothStderr,pipeAfterLine,users[existUsersIndex[i]].numberPipe,users[existUsersIndex[i]].pipe_expired_table);	
+								multiProcess(commandVec,process_count,hasNumberPipe,bothStderr,pipeAfterLine,users[existUsersIndex[i]].numberPipe,users[existUsersIndex[i]].pipe_expired_table,users[existUsersIndex[i]]);	
 							}		
 						}
 				
@@ -316,7 +316,7 @@ int main(int argc, char *argv[]) {
 	return 0;
 }
 // Single process handle 
-void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE]){
+void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],User user){
 	pid_t child_done_pid;
 	int child_done_status;
 	bool needRedirection =false;
@@ -339,7 +339,9 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 				redirectionFileName = commandVec[i+1] ;
 				break;
 			}else{
-				cerr << "syntax error near unexpected token\n";
+				string temp = "syntax error near unexpected token\n";
+				cerr << temp;
+				write(user.socketfd,temp.c_str(),temp.length());
 				return;
 			}
 		}
@@ -381,6 +383,10 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 			
 		//if this child need to number pipe to another line
 		if(hasNumberPipe==true){
+			// dup socket to STDERR_FILENO
+			dup2(user.socketfd,STDERR_FILENO);
+			close(user.socketfd);
+
 			if(pipeToSameLine == -1){
 				// Use the new Pipe.
 				close(numberPipe[newNumberPipeIndex][0]); //close read
@@ -396,6 +402,11 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 					dup2(numberPipe[pipeToSameLine][1],STDERR_FILENO);
 				}
 			}
+		}else{
+			// no number pipe -> output to socket
+			dup2(user.socketfd,STDOUT_FILENO);
+			dup2(user.socketfd,STDERR_FILENO);
+			close(user.socketfd);
 		}
 	
 		//if need to redirection -> reset the STDOUT to a file
@@ -413,7 +424,8 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 
    		// Ready to execvp
        	if(execvp(arg[0],arg)==-1){ // execvp fail
-   			cerr <<"Unknown command: ["<<arg[0]<<"].\n";
+			string temp = "Unknown command: [" + string(arg[0]) + "].\n";
+			cerr << temp ; // STDERR is socket now . so it will also be passed to client.
        		exit(10);
         }	
 	}else if(fork_pid >0){ //Parent
@@ -436,7 +448,7 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 }
 
 // Multi process handle
-void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE]){
+void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],User user){
 	// First handle all of the command and it's argument
 	int process_index =0;
 	int process_cmd_index=0;
@@ -467,7 +479,9 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 				redirectionFileName = commandVec[cmd_index+1];
 				break ;
 			}else{
-				cerr << "syntax error near unexpected token\n";
+				string temp = "syntax error near unexpected token\n";
+				cerr << temp ;
+				write(user.socketfd,temp.c_str(),temp.length());
 				return ;
 			}		
 		}else if(commandVec[cmd_index].find("!")!= string::npos){ //Find ! in this string
@@ -502,6 +516,11 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 			dup2(mPipe[0][1],STDOUT_FILENO);
 			close(mPipe[0][1]);
 			
+			// Child 1 doesn't need slaveSocket
+			// but STDERR may need it so -> dup to STDERR
+			dup2(user.socketfd,STDERR_FILENO);
+			close(user.socketfd);
+
 			// Before execvp -> close useless number Pipe
 			for(int i=0;i<existPipeIndex.size();i++){
 				close(numberPipe[existPipeIndex[i]][0]);
@@ -510,7 +529,8 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 
 			// Ready to execvp
 			if(execvp(arg[0][0],arg[0]) == -1){ // execvp fail (maybe bug)
-				cerr <<"Unknown command: ["<<arg[0][0]<<"].\n";
+				string temp = "Unknown command: [" + string(arg[0][0]) + "].\n";
+				cerr << temp ;
 				exit(0);
 			}
 
@@ -542,6 +562,10 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 
 				//if this child need to number pipe to another line
 				if(hasNumberPipe==true){
+					//dup socket to STDERR_FILENO
+					dup2(user.socketfd,STDERR_FILENO);
+					close(user.socketfd);
+
 					if(pipeToSameLine == -1){
 						// Use the new Pipe.
 						close(numberPipe[newNumberPipeIndex][0]); //close read
@@ -557,6 +581,11 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 							dup2(numberPipe[pipeToSameLine][1],STDERR_FILENO);
 						}
 					}
+				}else{
+					// no number pipe -> output to socket
+					dup2(user.socketfd,STDOUT_FILENO);
+					dup2(user.socketfd,STDERR_FILENO);
+					close(user.socketfd);
 				}
 
 				if(needRedirection){
@@ -611,6 +640,10 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 			dup2(mPipe[0][1],STDOUT_FILENO);
 			close(mPipe[0][1]);
 		
+			// Child doesn't need slaveSocket but STDERR may need
+			dup2(user.socketfd,STDERR_FILENO);
+			close(user.socketfd);
+
 			// Before execvp -> close useless number Pipe
 			for(int i=0;i<existPipeIndex.size();i++){
 				close(numberPipe[existPipeIndex[i]][0]);
@@ -651,6 +684,10 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 					dup2(mPipe[process_index%2][1],STDOUT_FILENO); //dup behind write to STDOUT
 					close(mPipe[process_index%2][1]); //close behind write
 					
+					// Process in the middle doesn't need slaveSocket but STDERR may need
+					dup2(user.socketfd,STDERR_FILENO);
+					close(user.socketfd);
+
 					// Before execvp -> close useless number pipe
 					for(int i=0;i<existPipeIndex.size();i++){
 						close(numberPipe[existPipeIndex[i]][0]);
@@ -694,6 +731,10 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 			}else if(last_process ==0){ //child
 				//if this child need to number pipe to another line
 				if(hasNumberPipe==true){
+					// dup socket to STDERR_FILENO
+					dup2(user.socketfd,STDERR_FILENO);
+					close(user.socketfd);
+
 					if(pipeToSameLine == -1){
 						// Use the new Pipe.
 						close(numberPipe[newNumberPipeIndex][0]); //close read
@@ -709,6 +750,11 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 							dup2(numberPipe[pipeToSameLine][1],STDERR_FILENO);
 						}
 					}
+				}else{
+					// no number pipe -> output to socket
+					dup2(user.socketfd,STDOUT_FILENO);
+					dup2(user.socketfd,STDERR_FILENO);
+					close(user.socketfd);
 				}
 			
 				close(mPipe[(process_index-1)%2][1]); //close front write
