@@ -12,6 +12,7 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <map>
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -24,26 +25,83 @@
 #define SSOCKET_TABLE_SIZE 30
 using namespace std;
 
-void callPrintenv(string envVar);
-void callSetenv(string envVar,string value);
-void singleProcess(vector<string>commandVec,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE]);
-void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE]);
-
 void PET_init(int pipe_expired_table[PET_SIZE]);
 void PET_iterate(int pipe_expired_table[PET_SIZE]); 
 int PET_findExpired(int pipe_expired_table[PET_SIZE]);
 int PET_findSameLine(int pipe_expired_table[PET_SIZE],int target_line);
 int PET_emptyPipeIndex(int pipe_expired_table[PET_SIZE]);
 vector<int> PET_existPipe(int pipe_expired_table[PET_SIZE]);
+
+// User class
+class User{
+private:
+	bool available ;
+
+public:
+	int numberPipe[PET_SIZE][2];
+	int pipe_expired_table[PET_SIZE];
+
+	int socketfd ;
+	int id ;
+	string name ;
+	string ipAddress ;
+	int port ;
+	map<string,string> envMap;
+
+	// functions
+	User(){
+		PET_init(pipe_expired_table);
+		reset();
+	}
+	void init(int id,string ipAddress,int port){
+		available = true;
+		this -> id = id;
+		this -> ipAddress = ipAddress;
+		this -> port = port ;
+		name = "(no name)" ;
+		envMap["PATH"] = "bin:.";
+		PET_init(pipe_expired_table);
+	}
+	void reset(){
+		available = false;
+		socketfd =-1;
+		id =-1;
+		name ="";
+		ipAddress ="";
+		port = -1;
+		envMap.clear();
+
+		for(int i=0;i<PET_SIZE;i++){
+			if(pipe_expired_table[i]!= -1){ // Except empty:-1 
+				close(numberPipe[i][0]);
+				close(numberPipe[i][1]);
+			}
+		}
+		PET_init(pipe_expired_table);
+	}
+	void addMap(string key,string value){
+		envMap[key]=value;
+	}
+	bool getAvailable(){
+		return available;
+	}
+};
+
+void callPrintenv(string envVar,User user);
+void callSetenv(string envVar,string value);
+void singleProcess(vector<string>commandVec,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE]);
+void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE]);
+
 void wait4children(int signo);
 
-void SST_init(int slaveSocketTable[SSOCKET_TABLE_SIZE]);
-int SST_findEmpty(int slaveSocketTable[SSOCKET_TABLE_SIZE]);
-int SST_count(int slaveSocketTable[SSOCKET_TABLE_SIZE]);
-vector<int> SST_existSocket(int slaveSocketTable[SSOCKET_TABLE_SIZE]);
 string extractClientInput(char buffer[MAX_LENGTH],int readCount);
 
 void dbug(int line);
+
+
+int users_findEmpty(User users[SSOCKET_TABLE_SIZE]);
+vector<int> users_exist(User users[SSOCKET_TABLE_SIZE]);
+
 
 int main(int argc, char *argv[]) {
 	string input ="" ; 
@@ -67,15 +125,15 @@ int main(int argc, char *argv[]) {
 	string promptString ="% ";
 	bool bReuseAddr= true;
 	int port = stoi(argv[1]); 
+	User users[SSOCKET_TABLE_SIZE] ;
 
 	// select setting
 	int rtnVal ;
-	int slaveSocketTable[SSOCKET_TABLE_SIZE] ;
 	fd_set rfds,afds ;
 	int nfdp = getdtablesize();
 	FD_ZERO(&rfds);
 	FD_ZERO(&afds);	
-
+	
 	// Master socket setting 
 	if((masterSocket = socket(AF_INET,SOCK_STREAM,0))<0){
 		cerr << "master socket create Fail\n";
@@ -98,14 +156,8 @@ int main(int argc, char *argv[]) {
 	cout <<"Server is listening...\n";
 	listen(masterSocket,50);
 
-	// Pipe expired table initialization.
-	PET_init(pipe_expired_table);
-
 	// set $PATH to bin/ ./ initially
 	callSetenv("PATH","bin:.");
-
-	// slaveSocketTable initialization
-	SST_init(slaveSocketTable);
 
 	while(1){
 		memcpy(&rfds,&afds,sizeof(rfds));
@@ -117,40 +169,66 @@ int main(int argc, char *argv[]) {
 			// first check master Socket
 			if(FD_ISSET(masterSocket,&rfds)){
 				//  client want to connect to Server
-				int emptyIndex = SST_findEmpty(slaveSocketTable);
+				int emptyIndex = users_findEmpty(users) ;
 				clientLen = sizeof(clientAddr);
-				slaveSocketTable[emptyIndex] = accept(masterSocket,(struct sockaddr *)&clientAddr,(socklen_t *)&clientLen);
-				// Check clientAddr
-				cout << "IP: " <<inet_ntoa(clientAddr.sin_addr) << " port: "<< ntohs(clientAddr.sin_port) <<".\n"; 
-				if(slaveSocketTable[emptyIndex] <0){
+				users[emptyIndex].socketfd = accept(masterSocket,(struct sockaddr *)&clientAddr,(socklen_t *)&clientLen);
+
+				if(users[emptyIndex].socketfd <0){
 					cerr << "slaveSocket Accept error\n";
+					users[emptyIndex].reset();
 				}else{
+					// users initialization 
+					users[emptyIndex].init((emptyIndex+1),string(inet_ntoa(clientAddr.sin_addr)),(int)ntohs(clientAddr.sin_port));
 					// slave socket create Success -> add it to afds
-					FD_SET(slaveSocketTable[emptyIndex],&afds);
-					// send a prompt to it.
-					write(slaveSocketTable[emptyIndex],promptString.c_str(),promptString.length()) ;
+					FD_SET(users[emptyIndex].socketfd,&afds);
+					// send (1)Welcome (2)broadcast (3) prompt
+					string welcome_1 = "****************************************\n";
+					string welcome_2 = "** Welcome to the information server. **\n";
+					write(users[emptyIndex].socketfd,welcome_1.c_str(),welcome_1.length());
+					write(users[emptyIndex].socketfd,welcome_2.c_str(),welcome_2.length());
+					write(users[emptyIndex].socketfd,welcome_1.c_str(),welcome_1.length());
+					// broadcast
+					string loginMessage = "*** User \'"+ users[emptyIndex].name + "\' entered from "+ users[emptyIndex].ipAddress+":" +to_string(users[emptyIndex].port)+". ***\n";
+					cout << loginMessage ;
+
+					vector<int> existUsersIndex = users_exist(users);
+					for(int i=0;i<existUsersIndex.size();i++){
+						write(users[existUsersIndex[i]].socketfd,loginMessage.c_str(),loginMessage.length());
+					}
+					// prompt
+					write(users[emptyIndex].socketfd,promptString.c_str(),promptString.length());
 				}
 			}
 			// Second check slave socket
-			vector<int> existSocketIndex = SST_existSocket(slaveSocketTable);
-			for(int i=0;i<existSocketIndex.size();i++){
-				if(FD_ISSET(slaveSocketTable[existSocketIndex[i]],&rfds)){
+			vector<int> existUsersIndex = users_exist(users);
+			for(int i=0;i<existUsersIndex.size();i++){
+				if(FD_ISSET(users[existUsersIndex[i]].socketfd,&rfds)){
 					// get some message from slave Socket.
-					readCount = read(slaveSocketTable[existSocketIndex[i]],buffer,sizeof(buffer));
+					readCount = read(users[existUsersIndex[i]].socketfd,buffer,sizeof(buffer));
 					if(readCount ==0){
 						// readCount ==0 means socket close. -> Handle it.
-						// yell to everyone you leave
+						FD_CLR(users[existUsersIndex[i]].socketfd,&afds);
+						close(users[existUsersIndex[i]].socketfd);
+						string tempName = users[existUsersIndex[i]].name;	
+						users[existUsersIndex[i]].reset();
 
-						// rm afds / close Socket  / reset slaveSocketTable
-						cout << "User: " << slaveSocketTable[existSocketIndex[i]] << " just leave\n";
+						// broadcast
+						string logoutMessage = "*** User \'"+tempName+ "\' left. ***\n";
+
+						vector<int> existUsersIndex = users_exist(users);
+						for(int i=0;i<existUsersIndex.size();i++){
+							write(users[existUsersIndex[i]].socketfd,logoutMessage.c_str(),logoutMessage.length());
+						}
+						cout << logoutMessage;
 						
-						FD_CLR(slaveSocketTable[existSocketIndex[i]],&afds);
-						close(slaveSocketTable[existSocketIndex[i]]);
-						slaveSocketTable[existSocketIndex[i]] = -1 ;
-
 					}else{	
 						input = extractClientInput(buffer,readCount);
-						cout << "ID: " << slaveSocketTable[existSocketIndex[i]] <<" = " << input <<"\n";
+						cout <<"User: "<< users[existUsersIndex[i]].name <<" ID: "<< users[existUsersIndex[i]].id <<" says: " << input <<"\n";
+						// for each client -> reset environment variable first.
+						clearenv();
+						for(map<string,string>::iterator it=users[existUsersIndex[i]].envMap.begin();it!=users[existUsersIndex[i]].envMap.end();++it){
+							callSetenv(it->first,it->second);
+						}
 
 						// Now we got input from client -> handle the message.
 						// Flag initialization
@@ -164,24 +242,34 @@ int main(int argc, char *argv[]) {
 						}
 						// each round except for empty command  -> PET_iterate() 
 						if(commandVec.size()!=0){
-							PET_iterate(pipe_expired_table);
+							PET_iterate(users[existUsersIndex[i]].pipe_expired_table);
 						}
 				
 						// We want to check if the command is the three built-in command
 						if(commandVec.size()!=0 && commandVec[0]=="exit"){
-							// yell to everyone you leave
-						
-							// client want to exit ->  rm afds / close Socket / reset slaveSocketTable.
-							FD_CLR(slaveSocketTable[existSocketIndex[i]],&afds);
-							close(slaveSocketTable[existSocketIndex[i]]);
-							slaveSocketTable[existSocketIndex[i]] = -1;
+							// client want to exit ->  rm afds / close Socket / reset user.
+							FD_CLR(users[existUsersIndex[i]].socketfd,&afds);
+							close(users[existUsersIndex[i]].socketfd);
+							string tempName = users[existUsersIndex[i]].name; 
+							users[existUsersIndex[i]].reset();
+							// broadcast
+							string logoutMessage = "*** User \'"+tempName+ "\' left. ***\n";
+
+							vector<int> existUsersIndex = users_exist(users);
+							for(int i=0;i<existUsersIndex.size();i++){
+								write(users[existUsersIndex[i]].socketfd,logoutMessage.c_str(),logoutMessage.length());
+							}
+							cout << logoutMessage;
+
 						}else if(commandVec.size()!=0 && commandVec[0]=="printenv"){
 							if(commandVec.size()==2){
-								callPrintenv(commandVec[1]);     
+								callPrintenv(commandVec[1],users[existUsersIndex[i]]);     
 							} 
 						}else if(commandVec.size()!=0 && commandVec[0]=="setenv"){
 							if(commandVec.size()==3){
 								callSetenv(commandVec[1],commandVec[2]);    
+								// add variable to user's map
+								users[existUsersIndex[i]].envMap[commandVec[1]]=commandVec[2];
 							}
 						}else if(commandVec.size()!=0){ // The last condition is not empty.
 							// Not the three built-in command
@@ -209,9 +297,9 @@ int main(int argc, char *argv[]) {
 							// Now we have the number of processes 
 							// we can start to construct the pipe.
 							if(process_count ==1){
-								singleProcess(commandVec,hasNumberPipe,bothStderr,pipeAfterLine,numberPipe,pipe_expired_table);	
+								singleProcess(commandVec,hasNumberPipe,bothStderr,pipeAfterLine,users[existUsersIndex[i]].numberPipe,users[existUsersIndex[i]].pipe_expired_table);	
 							}else if(process_count>=2){
-								multiProcess(commandVec,process_count,hasNumberPipe,bothStderr,pipeAfterLine,numberPipe,pipe_expired_table);	
+								multiProcess(commandVec,process_count,hasNumberPipe,bothStderr,pipeAfterLine,users[existUsersIndex[i]].numberPipe,users[existUsersIndex[i]].pipe_expired_table);	
 							}		
 						}
 				
@@ -219,7 +307,7 @@ int main(int argc, char *argv[]) {
 						commandVec.clear();
 						ss.str("");
 						ss.clear();
-						write(slaveSocketTable[existSocketIndex[i]],promptString.c_str(),promptString.length());
+						write(users[existUsersIndex[i]].socketfd,promptString.c_str(),promptString.length());
 					}
 				}
 			}
@@ -724,18 +812,26 @@ vector<int> PET_existPipe(int pipe_expired_table[PET_SIZE]){
 }
 
 // three built-in commands(setenv,printenv,exit)
-void callPrintenv(string envVar){
+void callPrintenv(string envVar,User user){
 	const char* input = envVar.c_str() ;
 	char* path_string = getenv (input);
 
-	if (path_string!=NULL)
+	if (path_string!=NULL){
 		cout <<path_string<<endl;
+		string temp(path_string);
+		temp += "\n" ;
+		
+		// Send environment variable to user's socket.
+		write(user.socketfd,temp.c_str(),temp.length());
+	}
 }
 
 void callSetenv(string envVar,string value){
 	const char *envname = envVar.c_str();
 	const char *envval = value.c_str();
+
 	setenv(envname,envval,1);
+	cout << "env Variable set: " << envVar <<":" << value <<"\n" ;
 }
 
 // signal handler
@@ -744,38 +840,22 @@ void wait4children(int signo){
 	while(waitpid(-1,&status,WNOHANG)>0);
 }
 
-// slaveSocketTable Functions
-void SST_init(int slaveSocketTable[SSOCKET_TABLE_SIZE]){
+int users_findEmpty(User users[SSOCKET_TABLE_SIZE]){
+	int result =-1 ;
+	
 	for(int i=0;i<SSOCKET_TABLE_SIZE;i++){
-		slaveSocketTable[i] =-1 ;		
-	}
-}
-
-int SST_findEmpty(int slaveSocketTable[SSOCKET_TABLE_SIZE]){
-	int result =-1;
-	for(int i=0;i<SSOCKET_TABLE_SIZE;i++){
-		if(slaveSocketTable[i] ==-1){
-			result = i ;
-			break ;
+		if(users[i].getAvailable() == false){
+			result =i;
+			break;
 		}
 	}
-	return result ;
+	return result; 
 }
-
-int SST_count(int slaveSocketTable[SSOCKET_TABLE_SIZE]){
-	int result =0 ;
-	for(int i=0;i<SSOCKET_TABLE_SIZE;i++){
-		if(slaveSocketTable[i] != -1){
-			result ++ ;	
-		}
-	}
-	return result ;
-}
-vector<int> SST_existSocket(int slaveSocketTable[SSOCKET_TABLE_SIZE]){
+vector<int> users_exist(User users[SSOCKET_TABLE_SIZE]){
 	vector<int> result ;
 	for(int i=0;i<SSOCKET_TABLE_SIZE;i++){
-		if(slaveSocketTable[i] != -1){
-			result.push_back(i);		
+		if(users[i].getAvailable() == true){
+			result.push_back(i);
 		}
 	}
 	return result;
