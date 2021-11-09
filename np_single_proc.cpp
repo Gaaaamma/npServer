@@ -15,6 +15,7 @@
 
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include <sys/select.h>
 
@@ -63,7 +64,7 @@ int main(int argc, char *argv[]) {
 	int masterSocket,clientLen,readCount ;
 	struct sockaddr_in clientAddr , serverAddr;
 	char buffer[MAX_LENGTH] ={} ;
-	char promptBuffer[3] ={'%',' ','\0'};
+	string promptString ="% ";
 	bool bReuseAddr= true;
 	int port = stoi(argv[1]); 
 
@@ -108,11 +109,9 @@ int main(int argc, char *argv[]) {
 
 	while(1){
 		memcpy(&rfds,&afds,sizeof(rfds));
-		dbug(111);
 		rtnVal = select(nfdp,&rfds,(fd_set *)0,(fd_set *)0,(struct timeval *)0);
-		dbug(113);
 		if(rtnVal <0){
-			cerr << "rtnVal <0 : select(...) error\n" ;
+			continue ;
 		}else if(rtnVal >0){
 			// rntVal > 0 We need to check which socket need to transfer data.
 			// first check master Socket
@@ -122,22 +121,22 @@ int main(int argc, char *argv[]) {
 				clientLen = sizeof(clientAddr);
 				slaveSocketTable[emptyIndex] = accept(masterSocket,(struct sockaddr *)&clientAddr,(socklen_t *)&clientLen);
 				// Check clientAddr
-				cout << "IP: " <<clientAddr.sin_addr.s_addr << " port: "<< clientAddr.sin_port <<".\n"; 
+				cout << "IP: " <<inet_ntoa(clientAddr.sin_addr) << " port: "<< ntohs(clientAddr.sin_port) <<".\n"; 
 				if(slaveSocketTable[emptyIndex] <0){
 					cerr << "slaveSocket Accept error\n";
 				}else{
 					// slave socket create Success -> add it to afds
 					FD_SET(slaveSocketTable[emptyIndex],&afds);
+					// send a prompt to it.
+					write(slaveSocketTable[emptyIndex],promptString.c_str(),promptString.length()) ;
 				}
 			}
-			dbug(131);
 			// Second check slave socket
 			vector<int> existSocketIndex = SST_existSocket(slaveSocketTable);
 			for(int i=0;i<existSocketIndex.size();i++){
 				if(FD_ISSET(slaveSocketTable[existSocketIndex[i]],&rfds)){
 					// get some message from slave Socket.
 					readCount = read(slaveSocketTable[existSocketIndex[i]],buffer,sizeof(buffer));
-					dbug(138);
 					if(readCount ==0){
 						// readCount ==0 means socket close. -> Handle it.
 						// yell to everyone you leave
@@ -151,7 +150,7 @@ int main(int argc, char *argv[]) {
 
 					}else{	
 						input = extractClientInput(buffer,readCount);
-						cout << "Message from:" << slaveSocketTable[existSocketIndex[i]] <<"=" << input <<"\n";
+						cout << "ID: " << slaveSocketTable[existSocketIndex[i]] <<" = " << input <<"\n";
 
 						// Now we got input from client -> handle the message.
 						// Flag initialization
@@ -220,6 +219,7 @@ int main(int argc, char *argv[]) {
 						commandVec.clear();
 						ss.str("");
 						ss.clear();
+						write(slaveSocketTable[existSocketIndex[i]],promptString.c_str(),promptString.length());
 					}
 				}
 			}
