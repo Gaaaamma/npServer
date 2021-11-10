@@ -293,7 +293,39 @@ int main(int argc, char *argv[]) {
 							}
 
 						}else if(commandVec.size()!=0 && commandVec[0] == "name"){
-						
+							// this function is used to change user name
+							vector<int> newestUsersIndex = users_exist(users);
+							string allocateName = commandVec[1];
+							bool hadSameName = false;
+							string nameMessage ="" ;
+
+							// check if there is sameName 
+							for(int n=0;n<newestUsersIndex.size();n++){
+								if(users[newestUsersIndex[n]].name == allocateName){
+									// needless to broadcast since rename fail.
+									hadSameName = true ;
+									break ;
+								}
+							}
+
+							if(hadSameName == false){
+								// change name
+								users[existUsersIndex[i]].name = allocateName ;
+								nameMessage = "*** User from " + users[existUsersIndex[i]].ipAddress + " is named \'" + users[existUsersIndex[i]].name + "\'. ***\n" ;
+								cout << nameMessage ;
+
+								// broadcast
+								for(int n=0;n<newestUsersIndex.size();n++){
+									write(users[newestUsersIndex[n]].socketfd,nameMessage.c_str(),nameMessage.length());
+								}
+
+							}else if(hadSameName == true){
+								// Only send fail message to the client who named.	
+								nameMessage = "*** User \'" + allocateName + "\' already exists. ***\n" ;
+								cout << nameMessage ;
+								write(users[existUsersIndex[i]].socketfd,nameMessage.c_str(),nameMessage.length());
+							}
+
 						}else if(commandVec.size()!=0 && commandVec[0] == "tell"){
 						
 						}else if(commandVec.size()!=0 && commandVec[0] == "yell"){
