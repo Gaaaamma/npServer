@@ -216,8 +216,8 @@ int main(int argc, char *argv[]) {
 						string logoutMessage = "*** User \'"+tempName+ "\' left. ***\n";
 
 						vector<int> existUsersIndex = users_exist(users);
-						for(int i=0;i<existUsersIndex.size();i++){
-							write(users[existUsersIndex[i]].socketfd,logoutMessage.c_str(),logoutMessage.length());
+						for(int j=0;j<existUsersIndex.size();j++){
+							write(users[existUsersIndex[j]].socketfd,logoutMessage.c_str(),logoutMessage.length());
 						}
 						cout << logoutMessage;
 						
@@ -256,8 +256,8 @@ int main(int argc, char *argv[]) {
 							string logoutMessage = "*** User \'"+tempName+ "\' left. ***\n";
 
 							vector<int> existUsersIndex = users_exist(users);
-							for(int i=0;i<existUsersIndex.size();i++){
-								write(users[existUsersIndex[i]].socketfd,logoutMessage.c_str(),logoutMessage.length());
+							for(int j=0;j<existUsersIndex.size();j++){
+								write(users[existUsersIndex[j]].socketfd,logoutMessage.c_str(),logoutMessage.length());
 							}
 							cout << logoutMessage;
 
@@ -271,6 +271,33 @@ int main(int argc, char *argv[]) {
 								// add variable to user's map
 								users[existUsersIndex[i]].envMap[commandVec[1]]=commandVec[2];
 							}
+						// 4 communication function 
+						}else if(commandVec.size()!=0 && commandVec[0] == "who"){
+							// this function is used to check who is in the system
+							vector<int> newestUsersIndex = users_exist(users);
+							int whoCallerID = users[existUsersIndex[i]].id ;
+
+							// send message
+							string whoMessage = "<ID>\t<nickname>\t<IP:port>\t<indicate me>\n";
+							cout << whoMessage ;
+							write(users[existUsersIndex[i]].socketfd,whoMessage.c_str(),whoMessage.length());
+							for(int n=0;n<newestUsersIndex.size();n++){
+									whoMessage = to_string(users[newestUsersIndex[n]].id) +"\t"+users[newestUsersIndex[n]].name+"\t"+users[newestUsersIndex[n]].ipAddress+":"+to_string(users[newestUsersIndex[n]].port);
+									if(users[newestUsersIndex[n]].id != whoCallerID){ // it isn't me
+										whoMessage += "\n";
+									}else{ // it is me!
+										whoMessage += "\t<-me\n";
+									}
+									cout << whoMessage;
+									write(users[existUsersIndex[i]].socketfd,whoMessage.c_str(),whoMessage.length());
+							}
+
+						}else if(commandVec.size()!=0 && commandVec[0] == "name"){
+						
+						}else if(commandVec.size()!=0 && commandVec[0] == "tell"){
+						
+						}else if(commandVec.size()!=0 && commandVec[0] == "yell"){
+						
 						}else if(commandVec.size()!=0){ // The last condition is not empty.
 							// Not the three built-in command
 							// Ready to handle the command. 
