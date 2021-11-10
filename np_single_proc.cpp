@@ -311,7 +311,7 @@ int main(int argc, char *argv[]) {
 							if(hadSameName == false){
 								// change name
 								users[existUsersIndex[i]].name = allocateName ;
-								nameMessage = "*** User from " + users[existUsersIndex[i]].ipAddress + " is named \'" + users[existUsersIndex[i]].name + "\'. ***\n" ;
+								nameMessage = "*** User from " + users[existUsersIndex[i]].ipAddress +":"+to_string(users[existUsersIndex[i]].port)+ " is named \'" + users[existUsersIndex[i]].name + "\'. ***\n" ;
 								cout << nameMessage ;
 
 								// broadcast
@@ -327,7 +327,7 @@ int main(int argc, char *argv[]) {
 							}
 
 						}else if(commandVec.size()!=0 && commandVec[0] == "tell"){
-							// first user substr to handle tellMessage;
+							// first use substr to handle tellMessage;
 							// we need to know 'id' index in input.
 							int idIndex = input.find(commandVec[1]);					
 							string tellMessage = input.substr(idIndex+commandVec[1].length()+1);
@@ -351,13 +351,23 @@ int main(int argc, char *argv[]) {
 							
 							if(receiverExist == false){
 								// receiver doesn't exist -> print error message to sender
-								tellMessage = "*** Error: user #" +commandVec[1]+" doesn't exist yet.\n";
+								tellMessage = "*** Error: user #" +commandVec[1]+" does not exist yet. ***\n";
 								cout << tellMessage ;
 								write(users[existUsersIndex[i]].socketfd,tellMessage.c_str(),tellMessage.length());
 							}
 
 						}else if(commandVec.size()!=0 && commandVec[0] == "yell"){
-						
+							// first use substr to get yellMessage.
+							string yellMessage = input.substr(5);
+							yellMessage = "*** "+users[existUsersIndex[i]].name +" yelled ***: " + yellMessage +"\n";
+
+							// second get all user 
+							vector<int> newestUsersIndex = users_exist(users);
+							for(int n=0;n<newestUsersIndex.size();n++){
+								write(users[newestUsersIndex[n]].socketfd,yellMessage.c_str(),yellMessage.length());	
+							}
+							cout << yellMessage ;
+
 						}else if(commandVec.size()!=0){ // The last condition is not empty.
 							// Not the three built-in command
 							// Ready to handle the command. 
