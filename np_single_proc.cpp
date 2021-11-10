@@ -327,7 +327,35 @@ int main(int argc, char *argv[]) {
 							}
 
 						}else if(commandVec.size()!=0 && commandVec[0] == "tell"){
-						
+							// first user substr to handle tellMessage;
+							// we need to know 'id' index in input.
+							int idIndex = input.find(commandVec[1]);					
+							string tellMessage = input.substr(idIndex+commandVec[1].length()+1);
+
+							// tellMessage is handled
+							// Now we check if receiver existed.
+							vector<int> newestUsersIndex = users_exist(users);
+							bool receiverExist = false;
+
+							for(int n=0;n<newestUsersIndex.size();n++){
+								if(users[newestUsersIndex[n]].id == stoi(commandVec[1])){
+									// find receiver -> send message to it.
+									receiverExist = true;
+									tellMessage = "*** "+users[existUsersIndex[i]].name+" told you ***: "+tellMessage+"\n";
+									cout << tellMessage ;
+									write(users[newestUsersIndex[n]].socketfd,tellMessage.c_str(),tellMessage.length());
+
+									break;
+								}
+							}
+							
+							if(receiverExist == false){
+								// receiver doesn't exist -> print error message to sender
+								tellMessage = "*** Error: user #" +commandVec[1]+" doesn't exist yet.\n";
+								cout << tellMessage ;
+								write(users[existUsersIndex[i]].socketfd,tellMessage.c_str(),tellMessage.length());
+							}
+
 						}else if(commandVec.size()!=0 && commandVec[0] == "yell"){
 						
 						}else if(commandVec.size()!=0){ // The last condition is not empty.
