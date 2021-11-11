@@ -40,6 +40,7 @@ private:
 public:
 	int numberPipe[PET_SIZE][2];
 	int pipe_expired_table[PET_SIZE];
+	int userPipe[SSOCKET_TABLE_SIZE][2];
 
 	int socketfd ;
 	int id ;
@@ -47,10 +48,12 @@ public:
 	string ipAddress ;
 	int port ;
 	map<string,string> envMap;
+	
 
 	// functions
 	User(){
 		PET_init(pipe_expired_table);
+		userPipeInit();
 		reset();
 	}
 	void init(int id,string ipAddress,int port){
@@ -78,7 +81,30 @@ public:
 			}
 		}
 		PET_init(pipe_expired_table);
+
+		// close all userPipe that isn't -1
+		for(int i=0;i<SSOCKET_TABLE_SIZE;i++){
+			if(userPipe[i][0] != -1){ // userPipe read exist -> close it.
+				close(userPipe[i][0]);
+			}
+			if(userPipe[i][1] != -1){ // userPipe write exist -> close it.
+				close(userPipe[i][1]);
+			}
+		}
+		// then set all fd to -1;
+		userPipeInit();
 	}
+	void userPipeInit(){ // set all userPipe read write fd to -1
+		for(int i=0;i<SSOCKET_TABLE_SIZE;i++){
+			userPipe[i][0] =-1;
+			userPipe[i][1] =-1;
+		}		
+	}
+	void userPipeReset(int target){ // set target read write fd to -1 
+		userPipe[target][0] =-1;
+		userPipe[target][1] =-1;
+	}
+
 	void addMap(string key,string value){
 		envMap[key]=value;
 	}
@@ -89,8 +115,8 @@ public:
 
 void callPrintenv(string envVar,User user);
 void callSetenv(string envVar,string value);
-void singleProcess(vector<string>commandVec,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],User user);
-void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],User user);
+void singleProcess(vector<string>commandVec,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],User user,bool hasUserPipeFrom,bool hasUserPipeTo,int userPipeFrom,int userPipeTo);
+void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],User user,bool hasUserPipeFrom,bool hasUserPipeTo,int userPipeFrom,int userPipeTo);
 
 void wait4children(int signo);
 
@@ -117,6 +143,10 @@ int main(int argc, char *argv[]) {
 	bool hasNumberPipe = false;
 	bool bothStderr = false;
 	int pipeAfterLine =0 ;
+	bool hasUserPipeFrom = false;
+	bool hasUserPipeTo = false;
+	int userPipeFrom =0;
+	int userPipeTo =0;
 
 	// Socket setting
 	int masterSocket,clientLen,readCount ;
@@ -235,7 +265,11 @@ int main(int argc, char *argv[]) {
 						hasNumberPipe = false;
 						bothStderr = false;
 						pipeAfterLine =0 ;
-				
+						hasUserPipeFrom = false;
+						hasUserPipeTo = false;
+						userPipeFrom =0;
+						userPipeTo =0;
+
 						ss << input ;
 				    	while (ss >> aWord) {
 							commandVec.push_back(aWord);
@@ -374,6 +408,8 @@ int main(int argc, char *argv[]) {
 				
 							// We want to know how much process need to call fork()
 							// And check if there is number pipe -> flag on.
+							// if there is userPipeFrom -> flag on.
+							// if there is userPipeTo -> flag on.
 				      		int process_count =1 ;
 				      		for(int i=0;i<commandVec.size();i++){
 				        		if(commandVec[i].find("|")!= string::npos){ //Really find '|' in this element
@@ -388,15 +424,23 @@ int main(int argc, char *argv[]) {
 				      				hasNumberPipe = true;
 									bothStderr = true;
 									pipeAfterLine = stoi(commandVec[i].substr(1)) ;
+								}else if(commandVec[i].find(">")!= string::npos && commandVec[i].length() >1){ 
+									// find '>' and length >1 which means it has userPipeTo.
+									hasUserPipeTo =true;
+									userPipeTo = stoi(commandVec[i].substr(1));
+								}else if(commandVec[i].find("<")!= string::npos && commandVec[i].length() >1){
+									// find '<' and length >1 which means it has userPipeFrom.
+									hasUserPipeFrom =true;
+									userPipeFrom = stoi(commandVec[i].substr(1));
 								}
 							} 
 							
 							// Now we have the number of processes 
 							// we can start to construct the pipe.
 							if(process_count ==1){
-								singleProcess(commandVec,hasNumberPipe,bothStderr,pipeAfterLine,users[existUsersIndex[i]].numberPipe,users[existUsersIndex[i]].pipe_expired_table,users[existUsersIndex[i]]);	
+								singleProcess(commandVec,hasNumberPipe,bothStderr,pipeAfterLine,users[existUsersIndex[i]].numberPipe,users[existUsersIndex[i]].pipe_expired_table,users[existUsersIndex[i]],hasUserPipeFrom,hasUserPipeTo,userPipeFrom,userPipeTo);	
 							}else if(process_count>=2){
-								multiProcess(commandVec,process_count,hasNumberPipe,bothStderr,pipeAfterLine,users[existUsersIndex[i]].numberPipe,users[existUsersIndex[i]].pipe_expired_table,users[existUsersIndex[i]]);	
+								multiProcess(commandVec,process_count,hasNumberPipe,bothStderr,pipeAfterLine,users[existUsersIndex[i]].numberPipe,users[existUsersIndex[i]].pipe_expired_table,users[existUsersIndex[i]],hasUserPipeFrom,hasUserPipeTo,userPipeFrom,userPipeTo);	
 							}		
 						}
 				
@@ -413,7 +457,7 @@ int main(int argc, char *argv[]) {
 	return 0;
 }
 // Single process handle 
-void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],User user){
+void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],User user,bool hasUserPipeFrom,bool hasUserPipeTo,int userPipeFrom,int userPipeTo){
 	pid_t child_done_pid;
 	int child_done_status;
 	bool needRedirection =false;
@@ -545,7 +589,7 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 }
 
 // Multi process handle
-void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],User user){
+void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],User user,bool hasUserPipeFrom,bool hasUserPipeTo,int userPipeFrom,int userPipeTo){
 	// First handle all of the command and it's argument
 	int process_index =0;
 	int process_cmd_index=0;
