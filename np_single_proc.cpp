@@ -505,7 +505,7 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 		if(commandVec[i].find(">")!= string::npos){
 			// There is a ">" in command
 			// Now we check if there is a file name after ">"
-			if((i+1)<commandVec.size()){
+			if((i+1)<commandVec.size() && commandVec[i].length()==1){
 				needRedirection = true ;
 				redirectionFileName = commandVec[i+1] ;
 				cout << "Redirection File: " << redirectionFileName <<"\n"; //dbg
@@ -536,31 +536,12 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 	// Not exist : Just create a corrsponding user pipe.
 	}else if(hasUserPipeTo == true){
 		cout << "before fork -> hasUserPipeTo==true -> check whether we can create this pipe.\n"; //dbg
-		cout << "Still bug: want to see the actually value\n"; //dbg
-		cout << "userPipeTo: "<< userPipeTo <<" userlist[userPipeTo-1].getAvailable(): "<< userlist[userPipeTo-1].getAvailable() << " userlist[userPipeTo-1].getUserPipeExist("<< to_string(user->id)<<")==" << userlist[userPipeTo-1].getUserPipeExist(user->id)<<"\n" ; //dbg
-		cout << "Read: "  <<userlist[userPipeTo-1].userPipe[user->id-1][0] <<"\n";
-		cout << "Write: "  <<userlist[userPipeTo-1].userPipe[user->id-1][1] <<"\n";
 		// Under this condition -> we create a user pipe
 		if(userPipeTo<=30 && userlist[userPipeTo-1].getAvailable() ==true && userlist[userPipeTo-1].getUserPipeExist(user->id) ==false){
 			userPipeToNewCreate = true;
 			pipe(userlist[userPipeTo-1].userPipe[user->id-1]);
 			cout << "A new userPipe created: " <<"userlist["<<userPipeTo-1<<"].userPipe["<<user->id-1<<"].\n"; //dbg
 		}else{
-			// If here means we can't create the userPipe
-			// May led by many condition -> we find the condition and send it to sender.
-			cout << "we can't create userPipe -> find Why.\n"; //dbg
-
-			if(userPipeTo >30 || (userPipeTo<=30 && userlist[userPipeTo-1].getAvailable()==false)){	
-				//  means receiver must not exist
-				// print error message of receiver doesn't exist.
-				string errMessage ="*** Error: user #"+to_string(userPipeTo)+" does not exist yet. ***\n";
-				write(user->socketfd,errMessage.c_str(),errMessage.length());
-			}else if(userlist[userPipeTo-1].getUserPipeExist(user->id) == true){
-				// means the user pipe already exist.
-				string errMessage ="*** Error: the pipe #"+to_string(user->id)+"->#"+to_string(userlist[userPipeTo-1].id)+" already exists. ***\n";
-				cout << errMessage ; // dbg
-				write(user->socketfd,errMessage.c_str(),errMessage.length());
-			}	
 		}
 	}
 	
@@ -669,12 +650,10 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 				}
 			}
 
-		}else if(hasUserPipeTo ==true){
-			
+		}else if(hasUserPipeTo ==true){		
 			//Check if userPipe create successfully
 			if(userPipeToNewCreate == true){	
 				cout << "We are in Child hasUserPipeTo==true -> userPipeToNewCreate==true -> broadcast\n"; //dbg
-				cout << "Bug might here: existUserIndex.size()=" << existUsersIndex.size() <<"\n"; //dbg
 				// userPipe to receiver success -> broadcast to everyone
 				cout << user->name <<"\n"; //dbg
 				cout << user->id <<"\n"; //dbg
@@ -685,7 +664,6 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 				string userPipeMessage = "*** "+user->name+" (#"+to_string(user->id)+") just piped \'"+input+"\' to "+userlist[userPipeTo-1].name+" (#"+to_string(userPipeTo)+") ***\n";
 				cout << "no execute after userPipeMessage??\n"; //dbg
 				for(int n=0;n<existUsersIndex.size();n++){
-					cout << "I'm in the loop\n"; //dbg
 					cout << "write(userlist[" << existUsersIndex[n] << "].socketfd :" << userlist[existUsersIndex[n]].socketfd <<")\n"; //dbg
 					write(userlist[existUsersIndex[n]].socketfd,userPipeMessage.c_str(),userPipeMessage.length());
 				}	
@@ -697,6 +675,22 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 				userlist[userPipeTo-1].userPipe[user->id-1][1] = -1;
 
 			}else{	
+				// If here means we can't create the userPipe
+				// May led by many condition -> we find the condition and send it to sender.
+				cout << "we can't create userPipe -> find Why.\n"; //dbg
+
+				if(userPipeTo >30 || (userPipeTo<=30 && userlist[userPipeTo-1].getAvailable()==false)){	
+					//  means receiver must not exist
+					// print error message of receiver doesn't exist.
+					string errMessage ="*** Error: user #"+to_string(userPipeTo)+" does not exist yet. ***\n";
+					write(user->socketfd,errMessage.c_str(),errMessage.length());
+				}else if(userlist[userPipeTo-1].getUserPipeExist(user->id) == true){
+					// means the user pipe already exist.
+					string errMessage ="*** Error: the pipe #"+to_string(user->id)+"->#"+to_string(userlist[userPipeTo-1].id)+" already exists. ***\n";
+					cout << errMessage ; // dbg
+					write(user->socketfd,errMessage.c_str(),errMessage.length());
+				}	
+
 				// Still need need to execvp -> dup /dev/null to STDOUT_FILENO.
 				int devnull = open("/dev/null",O_RDWR);
 				dup2(devnull,STDOUT_FILENO);
