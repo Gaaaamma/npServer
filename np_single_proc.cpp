@@ -508,6 +508,22 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 	
 	cout << "actually in single\n"; //dbg
 
+	// handle broadcast at first time
+	if(hasUserPipeFrom ==true && userPipeFrom <=30 && userlist[userPipeFrom-1].getAvailable()==true && user->getUserPipeExist(userPipeFrom)==true){
+		// Broadcast
+		string userPipeMessage = "*** "+user->name+" (#"+to_string(user->id)+") just received from "+userlist[userPipeFrom-1].name+" (#"+to_string(userPipeFrom)+") by \'"+input+"\' ***\n";
+		for(int i=0;i<existUsersIndex.size();i++){
+			write(userlist[existUsersIndex[i]].socketfd,userPipeMessage.c_str(),userPipeMessage.length());
+		}	
+	}
+	if(hasUserPipeTo ==true && userPipeTo <=30 && userlist[userPipeTo-1].getAvailable()==true && userlist[userPipeTo-1].getUserPipeExist(user->id)==false ){
+		string userPipeMessage = "*** "+user->name+" (#"+to_string(user->id)+") just piped \'"+input+"\' to "+userlist[userPipeTo-1].name+" (#"+to_string(userPipeTo)+") ***\n";
+		for(int n=0;n<existUsersIndex.size();n++){
+			cout << "write(userlist[" << existUsersIndex[n] << "].socketfd :" << userlist[existUsersIndex[n]].socketfd <<")\n"; //dbg
+			write(userlist[existUsersIndex[n]].socketfd,userPipeMessage.c_str(),userPipeMessage.length());
+		}	
+	}
+
 	// Check if there is redirection command
 	for(int i=0;i<commandVec.size();i++){
 		if(commandVec[i].find(">")!= string::npos){
@@ -619,11 +635,6 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 
 			}else{
 				// sender and userPipe both exist !
-				// Broadcast
-				string userPipeMessage = "*** "+user->name+" (#"+to_string(user->id)+") just received from "+userlist[userPipeFrom-1].name+" (#"+to_string(userPipeFrom)+") by \'"+input+"\' ***\n";
-				for(int i=0;i<existUsersIndex.size();i++){
-					write(userlist[existUsersIndex[i]].socketfd,userPipeMessage.c_str(),userPipeMessage.length());
-				}	
 				// dup userPipe to STDIN_FILENO and close it and set it to -1
 				cout << "interst in pipe situation : user.userPipe[userPipeFrom-1][0]=" << user->userPipe[userPipeFrom-1][0] <<"\n";
 				cout << "interst in pipe situation : user.userPipe[userPipeFrom-1][1]=" << user->userPipe[userPipeFrom-1][1] <<"\n";
@@ -670,13 +681,6 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 				cout << input <<"\n"; //dbg
 				cout << userPipeTo << "\n"; // dbg
 				cout << userlist[userPipeTo-1].name <<"\n"; //dbg
-
-				string userPipeMessage = "*** "+user->name+" (#"+to_string(user->id)+") just piped \'"+input+"\' to "+userlist[userPipeTo-1].name+" (#"+to_string(userPipeTo)+") ***\n";
-				cout << "no execute after userPipeMessage??\n"; //dbg
-				for(int n=0;n<existUsersIndex.size();n++){
-					cout << "write(userlist[" << existUsersIndex[n] << "].socketfd :" << userlist[existUsersIndex[n]].socketfd <<")\n"; //dbg
-					write(userlist[existUsersIndex[n]].socketfd,userPipeMessage.c_str(),userPipeMessage.length());
-				}	
 
 				close(userlist[userPipeTo-1].userPipe[user->id-1][0]);
 				dup2(userlist[userPipeTo-1].userPipe[user->id-1][1],STDOUT_FILENO);	
@@ -802,6 +806,22 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 
 	cout << "In multiProcess now\n"; //dbg
 
+	// handle broadcast at first time
+	if(hasUserPipeFrom ==true && userPipeFrom <=30 && userlist[userPipeFrom-1].getAvailable()==true && user->getUserPipeExist(userPipeFrom)==true){
+		// Broadcast
+		string userPipeMessage = "*** "+user->name+" (#"+to_string(user->id)+") just received from "+userlist[userPipeFrom-1].name+" (#"+to_string(userPipeFrom)+") by \'"+input+"\' ***\n";
+		for(int i=0;i<existUsersIndex.size();i++){
+			write(userlist[existUsersIndex[i]].socketfd,userPipeMessage.c_str(),userPipeMessage.length());
+		}	
+	}
+	if(hasUserPipeTo ==true && userPipeTo <=30 && userlist[userPipeTo-1].getAvailable()==true && userlist[userPipeTo-1].getUserPipeExist(user->id)==false ){
+		string userPipeMessage = "*** "+user->name+" (#"+to_string(user->id)+") just piped \'"+input+"\' to "+userlist[userPipeTo-1].name+" (#"+to_string(userPipeTo)+") ***\n";
+		for(int n=0;n<existUsersIndex.size();n++){
+			cout << "write(userlist[" << existUsersIndex[n] << "].socketfd :" << userlist[existUsersIndex[n]].socketfd <<")\n"; //dbg
+			write(userlist[existUsersIndex[n]].socketfd,userPipeMessage.c_str(),userPipeMessage.length());
+		}	
+	}
+
 	// Handle argument and file redirection setting.
 	cout << "commandVec.size() =" << commandVec.size() <<"\n" ; //dbg
 
@@ -896,11 +916,6 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 
 				}else{
 					// sender and userPipe both exist !
-					// Broadcast
-					string userPipeMessage ="*** "+user->name+" (#"+to_string(user->id)+") just received from "+userlist[userPipeFrom-1].name+" (#"+to_string(userPipeFrom)+") by \'"+input+"\' ***\n";
-					for(int i=0;i<existUsersIndex.size();i++){
-						write(userlist[existUsersIndex[i]].socketfd,userPipeMessage.c_str(),userPipeMessage.length());
-					}	
 					// dup userPipe to STDIN_FILENO and close it and set it to -1
 					cout << "interst in pipe situation : user.userPipe[userPipeFrom-1][0]=" << user->userPipe[userPipeFrom-1][0] <<"\n";
 					cout << "interst in pipe situation : user.userPipe[userPipeFrom-1][1]=" << user->userPipe[userPipeFrom-1][1] <<"\n";
@@ -1047,13 +1062,6 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 						cout << userPipeTo << "\n"; // dbg
 						cout << userlist[userPipeTo-1].name <<"\n"; //dbg
 
-						string userPipeMessage = "*** "+user->name+" (#"+to_string(user->id)+") just piped \'"+input+"\' to "+userlist[userPipeTo-1].name+" (#"+to_string(userPipeTo)+") ***\n";
-						cout << "no execute after userPipeMessage??\n"; //dbg
-						for(int n=0;n<existUsersIndex.size();n++){
-							cout << "write(userlist[" << existUsersIndex[n] << "].socketfd :" << userlist[existUsersIndex[n]].socketfd <<")\n"; //dbg
-							write(userlist[existUsersIndex[n]].socketfd,userPipeMessage.c_str(),userPipeMessage.length());
-						}	
-
 						close(userlist[userPipeTo-1].userPipe[user->id-1][0]);
 						dup2(userlist[userPipeTo-1].userPipe[user->id-1][1],STDOUT_FILENO);	
 						close(userlist[userPipeTo-1].userPipe[user->id-1][1]);
@@ -1169,11 +1177,6 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 
 				}else{
 					// sender and userPipe both exist !
-					// Broadcast
-					string userPipeMessage ="*** "+user->name+" (#"+to_string(user->id)+") just received from "+userlist[userPipeFrom-1].name+" (#"+to_string(userPipeFrom)+") by \'"+input+"\' ***\n";
-					for(int i=0;i<existUsersIndex.size();i++){
-						write(userlist[existUsersIndex[i]].socketfd,userPipeMessage.c_str(),userPipeMessage.length());
-					}	
 					// dup userPipe to STDIN_FILENO and close it and set it to -1
 					cout << "interst in pipe situation : user.userPipe[userPipeFrom-1][0]=" << user->userPipe[userPipeFrom-1][0] <<"\n";
 					cout << "interst in pipe situation : user.userPipe[userPipeFrom-1][1]=" << user->userPipe[userPipeFrom-1][1] <<"\n";
@@ -1368,13 +1371,6 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 						cout << input <<"\n"; //dbg
 						cout << userPipeTo << "\n"; // dbg
 						cout << userlist[userPipeTo-1].name <<"\n"; //dbg
-
-						string userPipeMessage = "*** "+user->name+" (#"+to_string(user->id)+") just piped \'"+input+"\' to "+userlist[userPipeTo-1].name+" (#"+to_string(userPipeTo)+") ***\n";
-						cout << "no execute after userPipeMessage??\n"; //dbg
-						for(int n=0;n<existUsersIndex.size();n++){
-							cout << "write(userlist[" << existUsersIndex[n] << "].socketfd :" << userlist[existUsersIndex[n]].socketfd <<")\n"; //dbg
-							write(userlist[existUsersIndex[n]].socketfd,userPipeMessage.c_str(),userPipeMessage.length());
-						}	
 
 						close(userlist[userPipeTo-1].userPipe[user->id-1][0]);
 						dup2(userlist[userPipeTo-1].userPipe[user->id-1][1],STDOUT_FILENO);	
