@@ -91,6 +91,9 @@ public:
 				close(userPipe[i][1]);
 			}
 		}
+		// who user exit -> also need to clear other user's pipe that I pass to
+		
+
 		// then set all fd to -1;
 		userPipeInit();
 	}
@@ -132,10 +135,11 @@ public:
 			return false;
 		}
 	}
-
+	
 	bool getAvailable(){
 		return available;
 	}
+
 };
 
 void callPrintenv(string envVar,User user);
@@ -146,6 +150,8 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 void wait4children(int signo);
 
 string extractClientInput(char buffer[MAX_LENGTH],int readCount);
+
+void clearMessageUserPass(User logoutUser,User userlist[SSOCKET_TABLE_SIZE]);
 
 void dbug(int line);
 
@@ -265,7 +271,8 @@ int main(int argc, char *argv[]) {
 						FD_CLR(users[existUsersIndex[i]].socketfd,&afds);
 						close(users[existUsersIndex[i]].socketfd);
 						string tempName = users[existUsersIndex[i]].name;	
-						users[existUsersIndex[i]].reset();
+						clearMessageUserPass(users[existUsersIndex[i]],users);
+						users[existUsersIndex[i]].reset();	
 
 						// broadcast
 						string logoutMessage = "*** User \'"+tempName+ "\' left. ***\n";
@@ -310,6 +317,7 @@ int main(int argc, char *argv[]) {
 							FD_CLR(users[existUsersIndex[i]].socketfd,&afds);
 							close(users[existUsersIndex[i]].socketfd);
 							string tempName = users[existUsersIndex[i]].name; 
+							clearMessageUserPass(users[existUsersIndex[i]],users);
 							users[existUsersIndex[i]].reset();
 							// broadcast
 							string logoutMessage = "*** User \'"+tempName+ "\' left. ***\n";
@@ -971,6 +979,34 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 					pipe(numberPipe[newNumberPipeIndex]);
 					pipe_expired_table[newNumberPipeIndex] = pipeAfterLine ;
 				}
+			// If this command need to userPipe to someone
+			// Here we focus on  userPipe is existed or not
+			// Exist: needless to create again -> print error message.
+			// Not exist : Just create a corrsponding user pipe.
+			}else if(hasUserPipeTo == true){
+				cout << "before fork -> hasUserPipeTo==true -> check whether we can create this pipe.\n"; //dbg
+				// Under this condition -> we create a user pipe
+				if(userPipeTo<=30 && userlist[userPipeTo-1].getAvailable() ==true && userlist[userPipeTo-1].getUserPipeExist(user->id) ==false){
+					userPipeToNewCreate = true;
+					pipe(userlist[userPipeTo-1].userPipe[user->id-1]);
+					cout << "A new userPipe created: " <<"userlist["<<userPipeTo-1<<"].userPipe["<<user->id-1<<"].\n"; //dbg
+				}else{
+					cout << "since some problem Uncreated: " <<"userlist["<<userPipeTo-1<<"].userPipe["<<user->id-1<<"].\n"; //dbg
+					// If here means we can't create the userPipe
+					// May led by many condition -> we find the condition and send it to sender.
+					if(userPipeTo >30 || (userPipeTo<=30 && userlist[userPipeTo-1].getAvailable()==false)){	
+						//  means receiver must not exist
+						// print error message of receiver doesn't exist.
+						string errMessage ="*** Error: user #"+to_string(userPipeTo)+" does not exist yet. ***\n";
+						write(user->socketfd,errMessage.c_str(),errMessage.length());
+					}else if(userlist[userPipeTo-1].getUserPipeExist(user->id) == true){
+						// means the user pipe already exist.
+						string errMessage ="*** Error: the pipe #"+to_string(user->id)+"->#"+to_string(userlist[userPipeTo-1].id)+" already exists. ***\n";
+						cout << errMessage ; // dbg
+						write(user->socketfd,errMessage.c_str(),errMessage.length());
+					}	
+				}
+		
 			}
 
 			if( (fork_pid[1]=fork()) ==-1){
@@ -1001,6 +1037,40 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 							dup2(numberPipe[pipeToSameLine][1],STDERR_FILENO);
 						}
 					}
+				}else if(hasUserPipeTo ==true){		
+					//Check if userPipe create successfully
+					if(userPipeToNewCreate == true){	
+						cout << "We are in Child hasUserPipeTo==true -> userPipeToNewCreate==true -> broadcast\n"; //dbg
+						// userPipe to receiver success -> broadcast to everyone
+						cout << user->name <<"\n"; //dbg
+						cout << user->id <<"\n"; //dbg
+						cout << input <<"\n"; //dbg
+						cout << userPipeTo << "\n"; // dbg
+						cout << userlist[userPipeTo-1].name <<"\n"; //dbg
+
+						string userPipeMessage = "*** "+user->name+" (#"+to_string(user->id)+") just piped \'"+input+"\' to "+userlist[userPipeTo-1].name+" (#"+to_string(userPipeTo)+") ***\n";
+						cout << "no execute after userPipeMessage??\n"; //dbg
+						for(int n=0;n<existUsersIndex.size();n++){
+							cout << "write(userlist[" << existUsersIndex[n] << "].socketfd :" << userlist[existUsersIndex[n]].socketfd <<")\n"; //dbg
+							write(userlist[existUsersIndex[n]].socketfd,userPipeMessage.c_str(),userPipeMessage.length());
+						}	
+
+						close(userlist[userPipeTo-1].userPipe[user->id-1][0]);
+						dup2(userlist[userPipeTo-1].userPipe[user->id-1][1],STDOUT_FILENO);	
+						close(userlist[userPipeTo-1].userPipe[user->id-1][1]);
+						userlist[userPipeTo-1].userPipe[user->id-1][0] = -1;
+						userlist[userPipeTo-1].userPipe[user->id-1][1] = -1;
+
+					}else{	
+
+						// Still need need to execvp -> dup /dev/null to STDOUT_FILENO.
+						int devnull = open("/dev/null",O_RDWR);
+						dup2(devnull,STDOUT_FILENO);
+						close(devnull);
+					}
+					
+					dup2(user->socketfd,STDERR_FILENO);
+					close(user->socketfd);
 				}else{
 					// no number pipe -> output to socket
 					dup2(user->socketfd,STDOUT_FILENO);
@@ -1014,6 +1084,15 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
      				close(fd);
 				}
 				
+				//Before execvp -> Child closes the useless user pipe
+				for(int i=0;i<existUsersIndex.size();i++){
+					for(int j=0;j<SSOCKET_TABLE_SIZE;j++){
+						close(userlist[existUsersIndex[i]].userPipe[j][0]);	
+						close(userlist[existUsersIndex[i]].userPipe[j][1]);
+						userlist[existUsersIndex[i]].userPipe[j][0] = -1;
+						userlist[existUsersIndex[i]].userPipe[j][1] = -1;
+					}
+				}
 				// Before execvp -> close useless number pipe
 				for(int i=0;i<existPipeIndex.size();i++){
 					close(numberPipe[existPipeIndex[i]][0]);
@@ -1030,7 +1109,7 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 				close(mPipe[0][0]);
 				close(mPipe[0][1]);				
 
-				if(hasNumberPipe == true){
+				if(hasNumberPipe == true || hasUserPipeTo ==true){
 					// Needless to wait the process
 					signal(SIGCHLD,wait4children);
 				}else{
@@ -1336,6 +1415,21 @@ string extractClientInput(char buffer[MAX_LENGTH],int readCount){
 	}
 	return result;
 }
+
+void clearMessageUserPass(User logoutUser,User userlist[SSOCKET_TABLE_SIZE]){
+	// When user logout -> need to clear all message this user pass to
+	vector<int> onlineUserIndex = users_exist(userlist);
+	for(int i=0;i<onlineUserIndex.size();i++){
+		if(userlist[onlineUserIndex[i]].getUserPipeExist(logoutUser.id) == true){
+			close(userlist[onlineUserIndex[i]].userPipe[logoutUser.id-1][0]);
+			close(userlist[onlineUserIndex[i]].userPipe[logoutUser.id-1][1]);
+			userlist[onlineUserIndex[i]].userPipe[logoutUser.id-1][0] = -1;
+			userlist[onlineUserIndex[i]].userPipe[logoutUser.id-1][1] = -1;
+		}		
+	}
+
+}
+
 void dbug(int line){
 	cout << "line: " << line <<"\n";
 }
