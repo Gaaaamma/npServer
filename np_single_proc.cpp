@@ -542,7 +542,9 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 			pipe(userlist[userPipeTo-1].userPipe[user->id-1]);
 			cout << "A new userPipe created: " <<"userlist["<<userPipeTo-1<<"].userPipe["<<user->id-1<<"].\n"; //dbg
 		}else{
+			cout << "since some problem Uncreated: " <<"userlist["<<userPipeTo-1<<"].userPipe["<<user->id-1<<"].\n"; //dbg
 		}
+
 	}
 	
 	pid_t fork_pid = fork();
@@ -783,12 +785,18 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 	char* arg[process_count][256]={NULL} ;
 	
 	// If number pipe expired -> remember to handle it.
+	int userPipeToNewCreate = false;
 	int newNumberPipeIndex ;
 	int pipeToSameLine ;
 	int expiredIndex = PET_findExpired(pipe_expired_table);	
 	vector<int> existPipeIndex = PET_existPipe(pipe_expired_table); 
-	
+	vector<int> existUsersIndex = users_exist(userlist);
+
+	cout << "In multiProcess now\n"; //dbg
+
 	// Handle argument and file redirection setting.
+	cout << "commandVec.size() =" << commandVec.size() <<"\n" ; //dbg
+
 	for(int cmd_index=0; cmd_index<commandVec.size() ; cmd_index++){
 		if( commandVec[cmd_index].find("|")!= string::npos){ //Find | in this string
 			if(commandVec[cmd_index].length() ==1){
@@ -797,18 +805,28 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 				process_cmd_index =0 ;
 			}
 		}else if(commandVec[cmd_index].find(">")!= string::npos){ //Find > in this string
-			if((cmd_index+1) < commandVec.size()){ 
+			if(commandVec[cmd_index].length()==1 && (cmd_index+1) < commandVec.size()){ 
+				// it is file redirection command
 				needRedirection = true ;
 				redirectionFileName = commandVec[cmd_index+1];
 				break ;
+			}else if(commandVec[cmd_index].length() >1){
+				// it is >id userPipeTo command just ignore it
+				continue ;
+
 			}else{
 				string temp = "syntax error near unexpected token\n";
 				cerr << temp ;
 				write(user->socketfd,temp.c_str(),temp.length());
 				return ;
-			}		
+			}			
+		}else if(commandVec[cmd_index].find("<")!= string::npos){ //Find < in this string
+			// it is <id userPipeFrom command just ignore it
+			continue ;
+
 		}else if(commandVec[cmd_index].find("!")!= string::npos){ //Find ! in this string
 			break ;
+
 		}else{
 			arg[process_index][process_cmd_index] = strdup(commandVec[cmd_index].c_str());
 			process_cmd_index ++ ;
@@ -832,6 +850,60 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 				close(numberPipe[expiredIndex][1]);
 				dup2(numberPipe[expiredIndex][0],STDIN_FILENO);
 				close(numberPipe[expiredIndex][0]);
+			}else if(hasUserPipeFrom == true){
+				// if got hasUserPipeFrom
+				// Now we check if (1) sender doesn't exist (2)userPipe doesn't exist
+				cout << "Now we are in hasUserPipeFrom ==true , and userPipeFrom=" << userPipeFrom <<"\n"; //dbg
+				if(userPipeFrom >30){
+					// id > 30 means sends must not exist
+					// print error message of sender doesn't exist.
+					string errMessage ="*** Error: user #"+to_string(userPipeFrom)+" does not exist yet. ***\n";
+					write(user->socketfd,errMessage.c_str(),errMessage.length());
+		
+					// Still need need to execvp -> dup /dev/null to STDIN_FILENO.
+					int devnull = open("/dev/null",O_RDWR);
+					dup2(devnull,STDIN_FILENO);
+					close(devnull);
+		
+				}else if(userlist[userPipeFrom-1].getAvailable() == false){
+					// sender doesn't exist.	
+					// print error message of sender doesn't exist.
+					string errMessage ="*** Error: user #"+to_string(userPipeFrom)+" does not exist yet. ***\n";
+					write(user->socketfd,errMessage.c_str(),errMessage.length());
+		
+					// Still need need to execvp -> dup /dev/null to STDIN_FILENO.
+					int devnull = open("/dev/null",O_RDWR);
+					dup2(devnull,STDIN_FILENO);
+					close(devnull);
+
+				}else if(user->getUserPipeReadExist(userPipeFrom) == false){
+					// userPipe doesn't exist	
+					string errMessage ="*** Error: the pipe #"+to_string(userPipeFrom)+"->#"+to_string(user->id)+" does not exist yet. ***\n";
+					write(user->socketfd,errMessage.c_str(),errMessage.length());
+		
+					// Still need to execvp -> dup /dev/null to STDIN_FILENO.
+					int devnull = open("/dev/null",O_RDWR);
+					dup2(devnull,STDIN_FILENO);
+					close(devnull);
+
+				}else{
+					// sender and userPipe both exist !
+					// Broadcast
+					string userPipeMessage ="*** "+user->name+" (#"+to_string(user->id)+") just received from "+userlist[userPipeFrom-1].name+" (#"+to_string(userPipeFrom)+") by \'"+input+"\' ***\n";
+					for(int i=0;i<existUsersIndex.size();i++){
+						write(userlist[existUsersIndex[i]].socketfd,userPipeMessage.c_str(),userPipeMessage.length());
+					}	
+					// dup userPipe to STDIN_FILENO and close it and set it to -1
+					cout << "interst in pipe situation : user.userPipe[userPipeFrom-1][0]=" << user->userPipe[userPipeFrom-1][0] <<"\n";
+					cout << "interst in pipe situation : user.userPipe[userPipeFrom-1][1]=" << user->userPipe[userPipeFrom-1][1] <<"\n";
+
+					close(user->userPipe[userPipeFrom-1][1]);
+					dup2(user->userPipe[userPipeFrom-1][0],STDIN_FILENO);
+					close(user->userPipe[userPipeFrom-1][0]);
+					user->userPipe[userPipeFrom-1][1] = -1;
+					user->userPipe[userPipeFrom-1][0] = -1;
+					
+				}	
 			}		
 
 			// Child1 need to modify the stdout
@@ -843,6 +915,16 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 			// but STDERR may need it so -> dup to STDERR
 			dup2(user->socketfd,STDERR_FILENO);
 			close(user->socketfd);
+
+			//Before execvp -> Child closes the useless user pipe
+			for(int i=0;i<existUsersIndex.size();i++){
+				for(int j=0;j<SSOCKET_TABLE_SIZE;j++){
+					close(userlist[existUsersIndex[i]].userPipe[j][0]);	
+					close(userlist[existUsersIndex[i]].userPipe[j][1]);
+					userlist[existUsersIndex[i]].userPipe[j][0] = -1;
+					userlist[existUsersIndex[i]].userPipe[j][1] = -1;
+				}
+			}
 
 			// Before execvp -> close useless number Pipe
 			for(int i=0;i<existPipeIndex.size();i++){
@@ -858,6 +940,21 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 			}
 
 		}else if(fork_pid[0] >0) { //Parent
+			// Parent need tidy userPipe if someone had read from it successfully.
+			if(hasUserPipeFrom == true && userPipeFrom <=30 && userlist[userPipeFrom-1].getAvailable()==true && user->userPipe[userPipeFrom-1][0] != -1){
+				cout << "Let look what the value is in Parent (read): " << user->userPipe[userPipeFrom-1][0] <<"\n"; //dbg
+				cout << "Let look what the value is in Parent (write): " << user->userPipe[userPipeFrom-1][1] <<"\n"; //dbg
+	
+				close(user->userPipe[userPipeFrom-1][0]);
+				close(user->userPipe[userPipeFrom-1][1]);
+	
+				cout << "Parent close userPipe -> User.id=" << user->id <<" userPipeFrom="<<userPipeFrom <<"\n"; //dbg 
+				cout << "close(user.userPipe[" <<userPipeFrom-1 <<"][0]&[1])\n"; //dbg
+				user->userPipeReset(userPipeFrom-1);
+	
+				cout << "After reset called-> the value is in Parent (read): " << user->userPipe[userPipeFrom-1][0] <<"\n"; //dbg
+				cout << "After reset called the value is in Parent (write): " << user->userPipe[userPipeFrom-1][1] <<"\n"; //dbg
+			}
 			// Parent need to tidy expired number pipe
 			if(expiredIndex != -1){
 				close(numberPipe[expiredIndex][0]);
