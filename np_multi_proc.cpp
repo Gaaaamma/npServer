@@ -279,20 +279,24 @@ int main(int argc, char *argv[]) {
 							sleep(1);
 						}
 
-						// connect success -> write prompt & gain input from client
+						// connect success ->send (1)Welcome (2)broadcast (3) prompt
+						// (1) welcome
+						string welcome_1 = "****************************************\n";
+						string welcome_2 = "** Welcome to the information server. **\n";
+						write(slaveSocket,welcome_1.c_str(),welcome_1.length());
+						write(slaveSocket,welcome_2.c_str(),welcome_2.length());
+						write(slaveSocket,welcome_1.c_str(),welcome_1.length());
+						// develop -> (2) broadcast -> tell Parent to broadcast
+						// (3) prompt
 						write(slaveSocket,promptString.c_str(),promptString.length());
+
+						// wait for client input.
 						while(readCount = read(slaveSocket,buffer,sizeof(buffer))){
 							// develop -> execute variable function acoording to command
 							input = extractClientInput(buffer,readCount);
-							cout << "Child get message from Client: " << input <<"\n" ;
-							cout << "pass this message to both Parent & Client\n";
-							string passMessage = "I'm ChildProcess: " + input +"\n";
-							write(slaveSocket,passMessage.c_str(),passMessage.length());
-							write(ipcSocket,passMessage.c_str(),passMessage.length());
+							cout << "*** Child " << emptyIndex+1 << " says \'" << input <<"\' ***\n" ;
 							
-							// denote
 							// Start to handle the input
-							// Flag initialization
 							hasNumberPipe = false;
 							bothStderr = false;
 							pipeAfterLine =0 ;
@@ -376,6 +380,9 @@ int main(int argc, char *argv[]) {
 					if(readCount ==0){
 						// readCount ==0 means the process might dead.
 						cout <<userlist[existUserIndex[i]].getId()<<"\'s process dead\n"; 	
+
+						// develop -> broadcast to everyone userlist[existUserIndex[i]] left ;
+
 						FD_CLR(userlist[existUserIndex[i]].getIpcSocketfd(),&afds);
 						close(userlist[existUserIndex[i]].getIpcSocketfd());
 						userlist[existUserIndex[i]].reset();
