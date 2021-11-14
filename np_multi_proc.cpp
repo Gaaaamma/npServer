@@ -13,13 +13,94 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+#include <sys/un.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
+#include <sys/select.h>
+#include <errno.h>
 
 #define PET_SIZE 1000
 #define MAX_LENGTH 15000
+#define MAX_USERNUMBER 30
 
 using namespace std;
+
+// class User
+// we use this class to record the client's ID/Name/IP/Port
+class User{
+private:
+	bool available ;
+	int ipcSocketfd ;
+	int id ;
+	int pid ;
+	string name ;
+	string ipAddress ;
+	int port ;
+
+public:
+	User(){
+		reset();
+	}
+	void reset(){	
+		available = false;
+		ipcSocketfd = -1;
+		id = -1;
+		pid = -1;
+		name = "(no name)";
+		ipAddress = "";
+		port = -1;
+	}
+
+	bool getAvailable(){
+		return available ;
+	}
+	void setAvailable(bool available){
+		this -> available = available;
+	}
+
+	int getIpcSocketfd(){
+		return ipcSocketfd;
+	}
+	void setIpcSocketfd(int ipcSocketfd){
+		this -> ipcSocketfd = ipcSocketfd ;
+	}
+
+	int getId(){
+		return id ;
+	}
+	void setId(int id){
+		this -> id = id;
+	}
+	
+	int getPid(){
+		return pid;
+	}
+	void setPid(int pid){
+		this -> pid = pid;
+	}
+
+	string getName(){
+		return name ;
+	}
+	void setName(string name){
+		this -> name = name;
+	}
+
+	string getIpAddress(){
+		return ipAddress ;
+	}
+	void setIpAddress(string ipAddress){
+		this -> ipAddress = ipAddress ;
+	}
+
+	int getPort(){
+		return port;
+	}
+	void setPort(int port){
+		this -> port = port ;
+	}
+};
 
 void callPrintenv(string envVar,int mSocket);
 void callSetenv(string envVar,string value);
@@ -32,8 +113,11 @@ int PET_findExpired(int pipe_expired_table[PET_SIZE]);
 int PET_findSameLine(int pipe_expired_table[PET_SIZE],int target_line);
 int PET_emptyPipeIndex(int pipe_expired_table[PET_SIZE]);
 vector<int> PET_existPipe(int pipe_expired_table[PET_SIZE]);
-void wait4children(int signo);
 
+vector<int> existUser(User userlist[MAX_USERNUMBER]);
+int emptyUserIndex(User userlist[MAX_USERNUMBER]);
+
+void wait4children(int signo);
 string extractClientInput(char buffer[MAX_LENGTH],int readCount);
 
 int main(int argc, char *argv[]) {
@@ -55,9 +139,21 @@ int main(int argc, char *argv[]) {
 	int masterSocket,slaveSocket,clientLen,readCount ;
 	struct sockaddr_in clientAddr , serverAddr;
 	char buffer[MAX_LENGTH] ={} ;
+	string promptString ="% ";
 	char promptBuffer[3] ={'%',' ','\0'};
 	bool bReuseAddr= true;
 	int port = stoi(argv[1]); 
+
+	// Select & IpcSocket setting
+	User userlist[MAX_USERNUMBER];
+	int selectRtnVal ;
+	fd_set rfds,afds;
+	int nfdp = getdtablesize();
+	FD_ZERO(&rfds);
+	FD_ZERO(&afds);
+	
+	int ipcSocket,ipcSlaveSocket =-1;
+	struct sockaddr_un unSAddr;
 
 	// Pipe expired table initialization.
 	PET_init(pipe_expired_table);
@@ -68,6 +164,8 @@ int main(int argc, char *argv[]) {
 	// Master socket setting 
 	if((masterSocket = socket(AF_INET,SOCK_STREAM,0))<0){
 		cerr << "master socket create Fail\n";	
+	}else{
+		FD_SET(masterSocket,&afds);
 	}
 	bzero(&serverAddr,sizeof(serverAddr));
 	serverAddr.sin_family = AF_INET ;
@@ -81,102 +179,216 @@ int main(int argc, char *argv[]) {
 	}
 	
 	cout <<"Server is listening...\n";
-	listen(masterSocket,50);
+	listen(masterSocket,5);
 
 	while(true){
-		clientLen = sizeof(clientAddr);	
-		slaveSocket = accept(masterSocket,(struct sockaddr *)&clientAddr,(socklen_t *)&clientLen);
-		if(slaveSocket <0){
-			cerr <<"server accept error\n";
+		memcpy(&rfds,&afds,sizeof(rfds));
+		selectRtnVal = select(nfdp,&rfds,(fd_set *)0,(fd_set *)0,(struct timeval *)0);
+		
+		if(selectRtnVal <0){
+			continue;
 		}else{
-			// socket connect success.
-			int sockForkPid;
-			cout <<"slaveSocket created Success\n";
-			if((sockForkPid = fork()) < 0){  // fork error
-				cerr << "fork error\n";
-			}else if(sockForkPid ==0){ //Child Process
-				close(masterSocket);
-				// Write the first prompt
-				if(write(slaveSocket,promptBuffer,2)<0){
-					cerr << "First prompt fail\n";
-				}
+			// selectRtnVal >0  Now check which fd is on
+			// if masterSocket is on
+			if(FD_ISSET(masterSocket,&rfds)){
+				// develop							
+				cout << "masterSocket rfds is on\n";			
+				clientLen = sizeof(clientAddr);	
+				slaveSocket = accept(masterSocket,(struct sockaddr *)&clientAddr,(socklen_t *)&clientLen);
+				if(slaveSocket <0){
+					cerr << "masterSocket accept error\n";
+				}else{
+					// server connect success
+					int sockForkPid;
+					int emptyIndex = emptyUserIndex(userlist);
+					cout <<"slaveSocket created Success\n";
+					
+					if((sockForkPid = fork()) <0){
+						cerr << "fork child error\n";
+					}else if(sockForkPid >0){ // Parent
+						// set user information in userlist
+						userlist[emptyIndex].setAvailable(true);
+						userlist[emptyIndex].setId(emptyIndex+1);
+						userlist[emptyIndex].setPid(sockForkPid);
+						userlist[emptyIndex].setIpAddress(string(inet_ntoa(clientAddr.sin_addr)));
+						userlist[emptyIndex].setPort((int)ntohs(clientAddr.sin_port));
 
-				//Start to handle client message ;
-				while(readCount = read(slaveSocket,buffer,sizeof(buffer))){
-					input = extractClientInput(buffer,readCount);
-					cout <<"Server get message: "<<input<<"\n";
-					if(readCount <0){
-						cerr << "readCount <0 \n";
-					}
-					// Start to handle the input
-					// Flag initialization
-					hasNumberPipe = false;
-					bothStderr = false;
-					pipeAfterLine =0 ;
-			
-					ss << input ;
-			    	while (ss >> aWord) {
-						commandVec.push_back(aWord);
-					}
-					// each round except for empty command  -> PET_iterate() 
-					if(commandVec.size()!=0){
-						PET_iterate(pipe_expired_table);
-					}
-			
-					// We want to check if the command is the three built-in command
-					if(commandVec.size()!=0 && commandVec[0]=="exit"){
-						break ;
-					}else if(commandVec.size()!=0 && commandVec[0]=="printenv"){
-						if(commandVec.size()==2){
-							callPrintenv(commandVec[1],slaveSocket);     
-						} 
-					}else if(commandVec.size()!=0 && commandVec[0]=="setenv"){
-						if(commandVec.size()==3){
-							callSetenv(commandVec[1],commandVec[2]);    
-						}
-					}else if(commandVec.size()!=0){ // The last condition is not empty.
-						// Not the three built-in command
-						// Ready to handle the command. 
-			
-						// We want to know how much process need to call fork()
-						// And check if there is number pipe -> flag on.
-			      		int process_count =1 ;
-			      		for(int i=0;i<commandVec.size();i++){
-			        		if(commandVec[i].find("|")!= string::npos){ //Really find '|' in this element
-			          			if(commandVec[i].length()==1){ // '|' Pipe only
-			            			process_count ++ ;
-			          			}else{ // it is number pipe
-									// hasNumberPipe flag on and set the pipeAfterLine
-									hasNumberPipe = true ;
-									pipeAfterLine = stoi(commandVec[i].substr(1));
-			          			}
-			        		}else if(commandVec[i].find("!")!= string::npos){//find '!' in this element
-			      				hasNumberPipe = true;
-								bothStderr = true;
-								pipeAfterLine = stoi(commandVec[i].substr(1)) ;
-							}
-						} 
+						// signal regist for child exit and close slaveSocket
+						signal(SIGCHLD,wait4children);
+						close(slaveSocket);
 						
-						// Now we have the number of processes 
-						// we can start to construct the pipe.
-						if(process_count ==1){
-							singleProcess(commandVec,hasNumberPipe,bothStderr,pipeAfterLine,numberPipe,pipe_expired_table,slaveSocket);	
-						}else if(process_count>=2){
-							multiProcess(commandVec,process_count,hasNumberPipe,bothStderr,pipeAfterLine,numberPipe,pipe_expired_table,slaveSocket);	
-						}		
+						// Parent need to be IPC Server
+						if((ipcSocket = socket(AF_UNIX,SOCK_STREAM,0)) < 0){
+							cerr << "ipcSocket create fail\n" ;
+						}
+
+						string ipcSocketPath="./user_pipe/ipcID"+to_string(emptyIndex+1)+".sock"; 
+						unlink(ipcSocketPath.c_str());
+						memset(&unSAddr,0,sizeof(unSAddr));
+						unSAddr.sun_family = AF_UNIX;
+						strncpy(unSAddr.sun_path,ipcSocketPath.c_str(),sizeof(unSAddr.sun_path)-1);
+
+						if(bind(ipcSocket,(const struct sockaddr*)&unSAddr,sizeof(unSAddr))==-1){
+							cerr << "parent ipc bind error: " << errno <<"\n";
+						}
+						cout << "Parent ipcSocket listening...\n";
+						listen(ipcSocket,5);
+						cout << "Parent ipcSocket is ready to accept\n";
+						ipcSlaveSocket = accept(ipcSocket,NULL,NULL);
+
+						if(ipcSlaveSocket <0){
+							cout << "ipcSocket accept error\n";
+							close(ipcSocket);
+							ipcSocket =-1 ;
+							ipcSlaveSocket = -1;
+
+						}else{
+							cout << "ipcSocket accept and fd: "<< ipcSlaveSocket <<"\n";
+							userlist[emptyIndex].setIpcSocketfd(ipcSlaveSocket);
+							close(ipcSocket);
+							ipcSocket =-1;
+							ipcSlaveSocket =-1;
+							// After connected -> select need to monitor this ipcSlaveSocket
+							FD_SET(userlist[emptyIndex].getIpcSocketfd(),&afds);
+							cout << "userlist[" << emptyIndex <<"].ipcSocketfd="<<to_string(userlist[emptyIndex].getIpcSocketfd()) <<" is set to &afds\n";
+
+						}
+
+					}else if (sockForkPid ==0){ //Child
+						// close useless socket
+						close(masterSocket);
+						vector<int> existUserIndex = existUser(userlist);
+						for(int i=0;i<existUserIndex.size();i++){
+							if(userlist[existUserIndex[i]].getIpcSocketfd() != -1){
+								close(userlist[existUserIndex[i]].getIpcSocketfd());
+								userlist[existUserIndex[i]].reset();
+							}
+						}
+						// Ready to connect to parent's ipcSocket	
+						if((ipcSocket = socket(AF_UNIX,SOCK_STREAM,0)) <0){
+							cerr <<"child ipcSocket create fail\n";
+						}
+						memset(&unSAddr,0,sizeof(unSAddr));
+						unSAddr.sun_family = AF_UNIX;
+						string ipcSocketPath="./user_pipe/ipcID"+to_string(emptyIndex+1)+".sock"; 
+						strncpy(unSAddr.sun_path,ipcSocketPath.c_str(),sizeof(unSAddr.sun_path)-1);
+						while(connect(ipcSocket,(const struct sockaddr *)&unSAddr,sizeof(unSAddr)) <0){
+							cerr << "Child ipcScoket connect error: " << errno <<"\n";
+							cerr << "Server may not create the server side ipcSocket\n";
+							cerr << "sleep for 1 sec and try to connect again\n";
+							sleep(1);
+						}
+
+						// connect success -> write prompt & gain input from client
+						write(slaveSocket,promptString.c_str(),promptString.length());
+						while(readCount = read(slaveSocket,buffer,sizeof(buffer))){
+							// develop -> execute variable function acoording to command
+							input = extractClientInput(buffer,readCount);
+							cout << "Child get message from Client: " << input <<"\n" ;
+							cout << "pass this message to both Parent & Client\n";
+							string passMessage = "I'm ChildProcess: " + input +"\n";
+							write(slaveSocket,passMessage.c_str(),passMessage.length());
+							write(ipcSocket,passMessage.c_str(),passMessage.length());
+							
+							// denote
+							// Start to handle the input
+							// Flag initialization
+							hasNumberPipe = false;
+							bothStderr = false;
+							pipeAfterLine =0 ;
+					
+							ss << input ;
+					    	while (ss >> aWord) {
+								commandVec.push_back(aWord);
+							}
+							// each round except for empty command  -> PET_iterate() 
+							if(commandVec.size()!=0){
+								PET_iterate(pipe_expired_table);
+							}
+					
+							// We want to check if the command is the three built-in command
+							if(commandVec.size()!=0 && commandVec[0]=="exit"){
+								break ;
+							}else if(commandVec.size()!=0 && commandVec[0]=="printenv"){
+								if(commandVec.size()==2){
+									callPrintenv(commandVec[1],slaveSocket);     
+								} 
+							}else if(commandVec.size()!=0 && commandVec[0]=="setenv"){
+								if(commandVec.size()==3){
+									callSetenv(commandVec[1],commandVec[2]);    
+								}
+							}else if(commandVec.size()!=0){ // The last condition is not empty.
+								// Not the three built-in command
+								// Ready to handle the command. 
+					
+								// We want to know how much process need to call fork()
+								// And check if there is number pipe -> flag on.
+					      		int process_count =1 ;
+					      		for(int i=0;i<commandVec.size();i++){
+					        		if(commandVec[i].find("|")!= string::npos){ //Really find '|' in this element
+					          			if(commandVec[i].length()==1){ // '|' Pipe only
+					            			process_count ++ ;
+					          			}else{ // it is number pipe
+											// hasNumberPipe flag on and set the pipeAfterLine
+											hasNumberPipe = true ;
+											pipeAfterLine = stoi(commandVec[i].substr(1));
+					          			}
+					        		}else if(commandVec[i].find("!")!= string::npos){//find '!' in this element
+					      				hasNumberPipe = true;
+										bothStderr = true;
+										pipeAfterLine = stoi(commandVec[i].substr(1)) ;
+									}
+								} 
+								
+								// Now we have the number of processes 
+								// we can start to construct the pipe.
+								if(process_count ==1){
+									singleProcess(commandVec,hasNumberPipe,bothStderr,pipeAfterLine,numberPipe,pipe_expired_table,slaveSocket);	
+								}else if(process_count>=2){
+									multiProcess(commandVec,process_count,hasNumberPipe,bothStderr,pipeAfterLine,numberPipe,pipe_expired_table,slaveSocket);	
+								}		
+							}
+					
+							//one term command is done -> Initialize it.
+							commandVec.clear();
+							ss.str("");
+							ss.clear();
+							write(slaveSocket,promptBuffer,2);
+						}
+						// client had left.
+						close(ipcSocket);
+						close(slaveSocket);
+						exit(0);
 					}
-			
-					//one term command is done -> Initialize it.
-					commandVec.clear();
-					ss.str("");
-					ss.clear();
-					write(slaveSocket,promptBuffer,2);
 				}
-				close(slaveSocket);
-				exit(0) ;
-			}else if(sockForkPid > 0){ //Parent Process
-				signal(SIGCHLD,wait4children);
-				close(slaveSocket);
+			}
+
+			// if any ipcSocket is on
+			vector<int> existUserIndex = existUser(userlist);
+			for(int i=0;i<existUserIndex.size();i++){
+				if(FD_ISSET(userlist[existUserIndex[i]].getIpcSocketfd(),&rfds)){
+					// get some message from userlist[existUserIndex[i]].socketfd
+					cout << "userlist["<<existUserIndex[i]<<"].socketfd rfds ON\n";
+					while((readCount = read(userlist[existUserIndex[i]].getIpcSocketfd(),buffer,sizeof(buffer))) == -1 ){
+						cout << "*** readCount == -1 / might be interrupted bt signal ***\n";
+						cout << "*** handle it -> read again ***\n";
+					}
+					if(readCount ==0){
+						// readCount ==0 means the process might dead.
+						cout <<userlist[existUserIndex[i]].getId()<<"\'s process dead\n"; 	
+						FD_CLR(userlist[existUserIndex[i]].getIpcSocketfd(),&afds);
+						close(userlist[existUserIndex[i]].getIpcSocketfd());
+						userlist[existUserIndex[i]].reset();
+
+					}else{
+						// readCount >0 this process wanna say something
+						// in this process there are 4 kinds of command need it.
+						// who / name / tell / yell 
+						input = extractClientInput(buffer,readCount);
+						cout << userlist[existUserIndex[i]].getId() <<"\'s Process sends \'" <<input << "\' to Parent\n";
+						// develop - who name tell yell broadcast 
+					}
+				}
 			}
 		}
 	}
@@ -747,7 +959,28 @@ void callSetenv(string envVar,string value){
 	const char *envval = value.c_str();
 	setenv(envname,envval,1);
 }
+// User functions
+vector<int> existUser(User userlist[MAX_USERNUMBER]){
+	vector<int> result ;
+	for(int i=0;i<MAX_USERNUMBER;i++){
+		if(userlist[i].getAvailable() == true){
+			result.push_back(i);
+		}
+	}
+	return result ;
+}
 
+int emptyUserIndex(User userlist[MAX_USERNUMBER]){
+	int result =-1;
+	
+	for(int i=0;i<MAX_USERNUMBER;i++){
+		if(userlist[i].getAvailable() == false){
+			result = i;
+			break;
+		}
+	}
+	return result;
+}
 // signal handler
 void wait4children(int signo){
 	int status;
