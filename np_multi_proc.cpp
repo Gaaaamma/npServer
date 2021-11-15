@@ -117,8 +117,13 @@ vector<int> PET_existPipe(int pipe_expired_table[PET_SIZE]);
 vector<int> existUser(User userlist[MAX_USERNUMBER]);
 int emptyUserIndex(User userlist[MAX_USERNUMBER]);
 
-void wait4children(int signo);
 string extractClientInput(char buffer[MAX_LENGTH],int readCount);
+
+void wait4children(int signo);
+void sig_usr(int signo);
+
+int gb_ipcSocket =-1;
+int gb_slaveSocket =-1;
 
 int main(int argc, char *argv[]) {
 	string input ="" ; 
@@ -203,15 +208,17 @@ int main(int argc, char *argv[]) {
 					int emptyIndex = emptyUserIndex(userlist);
 					cout <<"slaveSocket created Success\n";
 					
+					// set user information in userlist
+					userlist[emptyIndex].setAvailable(true);
+					userlist[emptyIndex].setId(emptyIndex+1);
+					userlist[emptyIndex].setIpAddress(string(inet_ntoa(clientAddr.sin_addr)));
+					userlist[emptyIndex].setPort((int)ntohs(clientAddr.sin_port));
+					
 					if((sockForkPid = fork()) <0){
 						cerr << "fork child error\n";
 					}else if(sockForkPid >0){ // Parent
-						// set user information in userlist
-						userlist[emptyIndex].setAvailable(true);
-						userlist[emptyIndex].setId(emptyIndex+1);
+						// setting child Pid
 						userlist[emptyIndex].setPid(sockForkPid);
-						userlist[emptyIndex].setIpAddress(string(inet_ntoa(clientAddr.sin_addr)));
-						userlist[emptyIndex].setPort((int)ntohs(clientAddr.sin_port));
 
 						// signal regist for child exit and close slaveSocket
 						signal(SIGCHLD,wait4children);
@@ -255,13 +262,22 @@ int main(int argc, char *argv[]) {
 						}
 
 					}else if (sockForkPid ==0){ //Child
-						// close useless socket
+						// set my pid
+						userlist[emptyIndex].setPid((int)getpid());
+
+						// for child -> reset global variable:  gb_slaveSocket and set singal handler
+						gb_slaveSocket = slaveSocket ;
+						signal(SIGUSR1,sig_usr);
+
+						// close useless socket and users except "itself" !!
 						close(masterSocket);
 						vector<int> existUserIndex = existUser(userlist);
 						for(int i=0;i<existUserIndex.size();i++){
-							if(userlist[existUserIndex[i]].getIpcSocketfd() != -1){
-								close(userlist[existUserIndex[i]].getIpcSocketfd());
-								userlist[existUserIndex[i]].reset();
+							if(existUserIndex[i] != emptyIndex){	
+								if(userlist[existUserIndex[i]].getIpcSocketfd() != -1){
+									close(userlist[existUserIndex[i]].getIpcSocketfd());
+									userlist[existUserIndex[i]].reset();
+								}
 							}
 						}
 						// Ready to connect to parent's ipcSocket	
@@ -278,6 +294,9 @@ int main(int argc, char *argv[]) {
 							cerr << "sleep for 1 sec and try to connect again\n";
 							sleep(1);
 						}
+							
+						// for child -> reset global variable:  gb_ipcSocket
+						gb_ipcSocket = ipcSocket ;
 
 						// connect success ->send (1)Welcome (2)broadcast (3) prompt
 						// (1) welcome
@@ -286,80 +305,111 @@ int main(int argc, char *argv[]) {
 						write(slaveSocket,welcome_1.c_str(),welcome_1.length());
 						write(slaveSocket,welcome_2.c_str(),welcome_2.length());
 						write(slaveSocket,welcome_1.c_str(),welcome_1.length());
-						// develop -> (2) broadcast -> tell Parent to broadcast
+						// (2) broadcast -> tell Parent to broadcast
+						string loginMessage = "login";
+						write(ipcSocket,loginMessage.c_str(),loginMessage.length());
+						//loginMessage = "*** User \'"+userlist[emptyIndex].getName()+"\' entered from "+ userlist[emptyIndex].getIpAddress()+":" +to_string(userlist[emptyIndex].getPort())+". ***\n";
+						//write(slaveSocket,loginMessage.c_str(),loginMessage.length());
+						// now use this way : parent also signal to me						
+						pause(); 
+
 						// (3) prompt
 						write(slaveSocket,promptString.c_str(),promptString.length());
 
 						// wait for client input.
-						while(readCount = read(slaveSocket,buffer,sizeof(buffer))){
-							// develop -> execute variable function acoording to command
-							input = extractClientInput(buffer,readCount);
-							cout << "*** Child " << emptyIndex+1 << " says \'" << input <<"\' ***\n" ;
-							
-							// Start to handle the input
-							hasNumberPipe = false;
-							bothStderr = false;
-							pipeAfterLine =0 ;
-					
-							ss << input ;
-					    	while (ss >> aWord) {
-								commandVec.push_back(aWord);
-							}
-							// each round except for empty command  -> PET_iterate() 
-							if(commandVec.size()!=0){
-								PET_iterate(pipe_expired_table);
-							}
-					
-							// We want to check if the command is the three built-in command
-							if(commandVec.size()!=0 && commandVec[0]=="exit"){
+						while(true){		
+							readCount = read(slaveSocket,buffer,sizeof(buffer));
+							if(readCount ==0){
+								// we close ipcSocket directly -> parent will know we leave
+								// and execute the corresponding broadcast
 								break ;
-							}else if(commandVec.size()!=0 && commandVec[0]=="printenv"){
-								if(commandVec.size()==2){
-									callPrintenv(commandVec[1],slaveSocket);     
-								} 
-							}else if(commandVec.size()!=0 && commandVec[0]=="setenv"){
-								if(commandVec.size()==3){
-									callSetenv(commandVec[1],commandVec[2]);    
-								}
-							}else if(commandVec.size()!=0){ // The last condition is not empty.
-								// Not the three built-in command
-								// Ready to handle the command. 
-					
-								// We want to know how much process need to call fork()
-								// And check if there is number pipe -> flag on.
-					      		int process_count =1 ;
-					      		for(int i=0;i<commandVec.size();i++){
-					        		if(commandVec[i].find("|")!= string::npos){ //Really find '|' in this element
-					          			if(commandVec[i].length()==1){ // '|' Pipe only
-					            			process_count ++ ;
-					          			}else{ // it is number pipe
-											// hasNumberPipe flag on and set the pipeAfterLine
-											hasNumberPipe = true ;
-											pipeAfterLine = stoi(commandVec[i].substr(1));
-					          			}
-					        		}else if(commandVec[i].find("!")!= string::npos){//find '!' in this element
-					      				hasNumberPipe = true;
-										bothStderr = true;
-										pipeAfterLine = stoi(commandVec[i].substr(1)) ;
-									}
-								} 
+
+							}else if(readCount ==-1){
+								cout << "*** Child "<<emptyIndex+1 <<" was interrupted by signal\n";
+								cout << "use while loop to go back to read message from client\n";
+								continue;
+
+							}else{	
+								// develop -> execute variable function acoording to command
+								input = extractClientInput(buffer,readCount);
+								cout << "*** Child " << emptyIndex+1 << " says \'" << input <<"\' ***\n" ;
 								
-								// Now we have the number of processes 
-								// we can start to construct the pipe.
-								if(process_count ==1){
-									singleProcess(commandVec,hasNumberPipe,bothStderr,pipeAfterLine,numberPipe,pipe_expired_table,slaveSocket);	
-								}else if(process_count>=2){
-									multiProcess(commandVec,process_count,hasNumberPipe,bothStderr,pipeAfterLine,numberPipe,pipe_expired_table,slaveSocket);	
-								}		
-							}
+								// Start to handle the input
+								hasNumberPipe = false;
+								bothStderr = false;
+								pipeAfterLine =0 ;
 					
-							//one term command is done -> Initialize it.
-							commandVec.clear();
-							ss.str("");
-							ss.clear();
-							write(slaveSocket,promptBuffer,2);
+								ss << input ;
+					    		while (ss >> aWord) {
+									commandVec.push_back(aWord);
+								}
+								// each round except for empty command  -> PET_iterate() 
+								if(commandVec.size()!=0){
+									PET_iterate(pipe_expired_table);
+								}
+					
+								// We want to check if the command is the three built-in command
+								if(commandVec.size()!=0 && commandVec[0]=="exit"){
+									// broadcast to everyone that you left
+									// just leave -> ipcSocket will be closed -> Parent will know we leave and handle logoutMessage.
+									break ;
+								}else if(commandVec.size()!=0 && commandVec[0]=="printenv"){
+									if(commandVec.size()==2){
+										callPrintenv(commandVec[1],slaveSocket);     
+									} 
+								}else if(commandVec.size()!=0 && commandVec[0]=="setenv"){
+									if(commandVec.size()==3){
+										callSetenv(commandVec[1],commandVec[2]);    
+									}
+								}else if(commandVec.size()!=0 && commandVec[0]=="name"){
+									// client want to change name
+									// send client input to user	
+									string sendMessage = commandVec[0]+" "+commandVec[1];
+									write(ipcSocket,sendMessage.c_str(),sendMessage.length());
+									// wait until signal
+									pause();
+
+								}else if(commandVec.size()!=0){ // The last condition is not empty.
+									// Not the three built-in command
+									// Ready to handle the command. 
+					
+									// We want to know how much process need to call fork()
+									// And check if there is number pipe -> flag on.
+					    	  		int process_count =1 ;
+					    	  		for(int i=0;i<commandVec.size();i++){
+					    	    		if(commandVec[i].find("|")!= string::npos){ //Really find '|' in this element
+					    	      			if(commandVec[i].length()==1){ // '|' Pipe only
+					    	        			process_count ++ ;
+					    	      			}else{ // it is number pipe
+												// hasNumberPipe flag on and set the pipeAfterLine
+												hasNumberPipe = true ;
+												pipeAfterLine = stoi(commandVec[i].substr(1));
+					    	      			}
+					    	    		}else if(commandVec[i].find("!")!= string::npos){//find '!' in this element
+					    	  				hasNumberPipe = true;
+											bothStderr = true;
+											pipeAfterLine = stoi(commandVec[i].substr(1)) ;
+										}
+									} 
+									
+									// Now we have the number of processes 
+									// we can start to construct the pipe.
+									if(process_count ==1){
+										singleProcess(commandVec,hasNumberPipe,bothStderr,pipeAfterLine,numberPipe,pipe_expired_table,slaveSocket);	
+									}else if(process_count>=2){
+										multiProcess(commandVec,process_count,hasNumberPipe,bothStderr,pipeAfterLine,numberPipe,pipe_expired_table,slaveSocket);	
+									}		
+								}
+					
+								//one term command is done -> Initialize it.
+								commandVec.clear();
+								ss.str("");
+								ss.clear();
+								write(slaveSocket,promptBuffer,2);
+							}
 						}
 						// client had left.
+						userlist[emptyIndex].reset();
 						close(ipcSocket);
 						close(slaveSocket);
 						exit(0);
@@ -374,14 +424,22 @@ int main(int argc, char *argv[]) {
 					// get some message from userlist[existUserIndex[i]].socketfd
 					cout << "userlist["<<existUserIndex[i]<<"].socketfd rfds ON\n";
 					while((readCount = read(userlist[existUserIndex[i]].getIpcSocketfd(),buffer,sizeof(buffer))) == -1 ){
-						cout << "*** readCount == -1 / might be interrupted bt signal ***\n";
+						cout << "*** readCount == -1 / might be interrupted by signal ***\n";
 						cout << "*** handle it -> read again ***\n";
 					}
 					if(readCount ==0){
 						// readCount ==0 means the process might dead.
 						cout <<userlist[existUserIndex[i]].getId()<<"\'s process dead\n"; 	
 
-						// develop -> broadcast to everyone userlist[existUserIndex[i]] left ;
+						// broadcast to everyone userlist[existUserIndex[i]] left ,Except user who send this message ;
+						string broadcastMessage = "*** User \'"+userlist[existUserIndex[i]].getName()+ "\' left. ***\n";
+						vector<int> broadcastUserIndex = existUser(userlist);
+						for(int n=0; n<broadcastUserIndex.size() ; n++){
+							if(existUserIndex[i] != broadcastUserIndex[n]){ // except who send this message
+								write(userlist[broadcastUserIndex[n]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());
+								kill(userlist[broadcastUserIndex[n]].getPid(),SIGUSR1);
+							}
+						}
 
 						FD_CLR(userlist[existUserIndex[i]].getIpcSocketfd(),&afds);
 						close(userlist[existUserIndex[i]].getIpcSocketfd());
@@ -389,11 +447,55 @@ int main(int argc, char *argv[]) {
 
 					}else{
 						// readCount >0 this process wanna say something
-						// in this process there are 4 kinds of command need it.
+						// in this process there are 4 kinds of command need it OR broadcast login logout .
 						// who / name / tell / yell 
 						input = extractClientInput(buffer,readCount);
 						cout << userlist[existUserIndex[i]].getId() <<"\'s Process sends \'" <<input << "\' to Parent\n";
-						// develop - who name tell yell broadcast 
+						// develop - who name tell yell AND broadcast login logout 
+						
+						if(input == "login"){			
+							// broadcast to everyone userlist[existUserIndex[i]] login ;
+							string broadcastMessage = "*** User \'"+ userlist[existUserIndex[i]].getName() + "\' entered from "+ userlist[existUserIndex[i]].getIpAddress()+":" +to_string(userlist[existUserIndex[i]].getPort())+". ***\n";
+							vector<int> broadcastUserIndex = existUser(userlist);
+							for(int n=0; n<broadcastUserIndex.size() ; n++){
+								write(userlist[broadcastUserIndex[n]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());
+								kill(userlist[broadcastUserIndex[n]].getPid(),SIGUSR1);
+							}
+
+						}else if(input.substr(0,4)=="name"){
+							string newName = input.substr(5); // name xyzabc -> substr(5) = xyzabc
+							string broadcastMessage ="";
+							bool noSameName = "true"; 
+
+							// check if there is same name
+							vector<int> broadcastUserIndex = existUser(userlist);
+							for(int k=0;k<broadcastUserIndex.size();k++){
+								if(userlist[broadcastUserIndex[k]].getName() == newName){		
+									noSameName = false;
+									break;
+								}				
+							}
+
+							if(noSameName ==true){
+								// reset this client's name and broadcast
+								userlist[existUserIndex[i]].setName(newName);
+								broadcastMessage = "*** User from " + userlist[existUserIndex[i]].getIpAddress()+":"+to_string(userlist[existUserIndex[i]].getPort())+ " is named \'" + userlist[existUserIndex[i]].getName()+"\'. ***\n" ;
+
+								for(int n=0; n<broadcastUserIndex.size() ; n++){
+									write(userlist[broadcastUserIndex[n]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());
+									kill(userlist[broadcastUserIndex[n]].getPid(),SIGUSR1);
+								}
+
+							}else if(noSameName ==false){
+								// noSameName == false -> just send error message to client who want to rename 
+								broadcastMessage = "*** User \'" + newName + "\' already exists. ***\n" ;
+								write(userlist[existUserIndex[i]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());
+								kill(userlist[existUserIndex[i]].getPid(),SIGUSR1);
+							}
+						}else{
+						
+						}
+
 					}
 				}
 			}
@@ -988,11 +1090,7 @@ int emptyUserIndex(User userlist[MAX_USERNUMBER]){
 	}
 	return result;
 }
-// signal handler
-void wait4children(int signo){
-	int status;
-	while(waitpid(-1,&status,WNOHANG)>0);
-}
+
 string extractClientInput(char buffer[MAX_LENGTH],int readCount){
 	string result ="" ;
 	
@@ -1003,4 +1101,30 @@ string extractClientInput(char buffer[MAX_LENGTH],int readCount){
 		result += buffer[i] ;
 	}
 	return result; 
+}
+
+// signal handler
+void wait4children(int signo){
+	int status;
+	while(waitpid(-1,&status,WNOHANG)>0);
+}
+
+void sig_usr(int signo){
+	if(signo == SIGUSR1){
+		cout << "sig_usr interrupt ! With signo: SIGUSR1\n";
+		// DEFINE : receive from Parent and echo to client
+		char buffer[MAX_LENGTH] = {};	
+		string input = "";
+
+		// receive message from Parent
+		int readCount = read(gb_ipcSocket,buffer,sizeof(buffer));
+		input = extractClientInput(buffer,readCount);
+		input += "\n";
+
+		// echo to client
+		write(gb_slaveSocket,input.c_str(),input.length());
+
+	}else if(signo == SIGUSR2){
+	
+	}
 }
