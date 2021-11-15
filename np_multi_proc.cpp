@@ -369,6 +369,22 @@ int main(int argc, char *argv[]) {
 									// wait until signal
 									pause();
 
+								}else if(commandVec.size()!=0 && commandVec[0]=="tell"){
+									//develop HEAD
+									string sendMessage = commandVec[0];
+									sendMessage = sendMessage + " " + commandVec[1] +" "+ input.substr(input.find(commandVec[1])+commandVec[1].length()+1);
+
+								}else if(commandVec.size()!=0 && commandVec[0]=="yell"){
+									string sendMessage = commandVec[0] ;
+									sendMessage = sendMessage + " " + input.substr(input.find("yell")+5);
+									write(ipcSocket,sendMessage.c_str(),sendMessage.length());
+									pause();
+
+								}else if(commandVec.size()!=0 && commandVec[0]=="who"){
+									string sendMessage = commandVec[0] ;
+									write(ipcSocket,sendMessage.c_str(),sendMessage.length());
+									pause();
+
 								}else if(commandVec.size()!=0){ // The last condition is not empty.
 									// Not the three built-in command
 									// Ready to handle the command. 
@@ -492,8 +508,32 @@ int main(int argc, char *argv[]) {
 								write(userlist[existUserIndex[i]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());
 								kill(userlist[existUserIndex[i]].getPid(),SIGUSR1);
 							}
-						}else{
+
+						}else if(input.substr(0,4) == "tell"){
 						
+						}else if(input.substr(0,4) == "yell"){
+							string broadcastMessage = "*** "+userlist[existUserIndex[i]].getName()+" yelled ***: "+input.substr(5) +"\n";
+							vector<int> broadcastUserIndex = existUser(userlist);
+							for(int n=0;n<broadcastUserIndex.size();n++){
+								write(userlist[broadcastUserIndex[n]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());
+								kill(userlist[broadcastUserIndex[n]].getPid(),SIGUSR1);
+							}
+
+						}else if(input.substr(0,3)== "who"){
+							string broadcastMessage = "<ID>\t<nickname>\t<IP:port>\t<indicate me>\n";	
+							
+							vector<int> broadcastUserIndex = existUser(userlist);
+							for(int n=0;n<broadcastUserIndex.size();n++){
+								broadcastMessage += to_string(userlist[broadcastUserIndex[n]].getId())+"\t"+userlist[broadcastUserIndex[n]].getName()+"\t"+userlist[broadcastUserIndex[n]].getIpAddress()+":"+to_string(userlist[broadcastUserIndex[n]].getPort()) ;
+								if(userlist[broadcastUserIndex[n]].getId() == userlist[existUserIndex[i]].getId()){
+									broadcastMessage += "\t<-me\n";
+								}else{
+									broadcastMessage += "\n";	
+								}
+							}			
+							cout << broadcastMessage ;
+							write(userlist[existUserIndex[i]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());
+							kill(userlist[existUserIndex[i]].getPid(),SIGUSR1);
 						}
 
 					}
@@ -1095,7 +1135,7 @@ string extractClientInput(char buffer[MAX_LENGTH],int readCount){
 	string result ="" ;
 	
 	for(int i=0;i<readCount;i++){
-		if(buffer[i]=='\n' || buffer[i]=='\r' || buffer[i]=='\0'){
+		if( ( buffer[i]=='\n' && (i+1)<readCount && (buffer[i+1]=='\r' || buffer[i+1]=='\0') ) || (buffer[i]=='\n' && (i+1)==readCount)  || buffer[i]=='\r' || buffer[i]=='\0'){
 			break ;
 		}
 		result += buffer[i] ;
