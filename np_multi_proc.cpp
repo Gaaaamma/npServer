@@ -268,7 +268,6 @@ int main(int argc, char *argv[]) {
 						// for child -> reset global variable:  gb_slaveSocket and set singal handler
 						gb_slaveSocket = slaveSocket ;
 						signal(SIGUSR1,sig_usr);
-
 						// close useless socket and users except "itself" !!
 						close(masterSocket);
 						vector<int> existUserIndex = existUser(userlist);
@@ -370,9 +369,9 @@ int main(int argc, char *argv[]) {
 									pause();
 
 								}else if(commandVec.size()!=0 && commandVec[0]=="tell"){
-									//develop HEAD
-									string sendMessage = commandVec[0];
-									sendMessage = sendMessage + " " + commandVec[1] +" "+ input.substr(input.find(commandVec[1])+commandVec[1].length()+1);
+									string sendMessage = commandVec[0] + " " + commandVec[1] +" "+ input.substr(input.find(commandVec[1])+commandVec[1].length()+1);
+									write(ipcSocket,sendMessage.c_str(),sendMessage.length());
+									pause(); //just testing
 
 								}else if(commandVec.size()!=0 && commandVec[0]=="yell"){
 									string sendMessage = commandVec[0] ;
@@ -510,7 +509,43 @@ int main(int argc, char *argv[]) {
 							}
 
 						}else if(input.substr(0,4) == "tell"){
-						
+							string target = "";
+							string message = "";
+							int spaceIndex =-1;
+							string broadcastMessage ="" ;
+							bool isUserOnline = false;
+
+							for(int n=5;n<input.length();n++){
+								if(input[n] == ' '){
+									spaceIndex = n;
+									break;
+								}	
+							}
+							
+							target = input.substr(5,spaceIndex-5);
+							message = input.substr(spaceIndex+1);
+							
+							// Find whether user online or not
+							cout << "target: " << target << " message: " << message <<"\n";
+							isUserOnline = userlist[stoi(target)-1].getAvailable();
+
+							if(isUserOnline ==true){
+								broadcastMessage = "*** "+ userlist[existUserIndex[i]].getName() + " told you ***: " + message + "\n";
+								write(userlist[stoi(target)-1].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());
+								kill(userlist[stoi(target)-1].getPid(),SIGUSR1);
+								
+								string secret = "secretcode001";
+								write(userlist[existUserIndex[i]].getIpcSocketfd(),secret.c_str(),secret.length());
+								kill(userlist[existUserIndex[i]].getPid(),SIGUSR1);
+
+							}else{
+								broadcastMessage ="*** Error: user #"+ target +" does not exist yet. ***\n";
+								write(userlist[existUserIndex[i]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());
+								kill(userlist[existUserIndex[i]].getPid(),SIGUSR1);
+
+							}
+							
+							
 						}else if(input.substr(0,4) == "yell"){
 							string broadcastMessage = "*** "+userlist[existUserIndex[i]].getName()+" yelled ***: "+input.substr(5) +"\n";
 							vector<int> broadcastUserIndex = existUser(userlist);
@@ -1162,9 +1197,11 @@ void sig_usr(int signo){
 		input += "\n";
 
 		// echo to client
-		write(gb_slaveSocket,input.c_str(),input.length());
+		if(input.substr(0,input.length()-1) != "secretcode001"){
+			write(gb_slaveSocket,input.c_str(),input.length());
+		}
 
 	}else if(signo == SIGUSR2){
-	
+		//do thing 	
 	}
 }
