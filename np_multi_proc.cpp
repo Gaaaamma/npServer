@@ -118,8 +118,8 @@ public:
 
 void callPrintenv(string envVar,int mSocket);
 void callSetenv(string envVar,string value);
-void singleProcess(vector<string>commandVec,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],int slaveSocket);
-void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],int slaveSocket);
+void singleProcess(vector<string>commandVec,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],int slaveSocket,bool hasUserPipeFrom,bool hasUserPipeTo,int userPipeFrom);
+void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],int slaveSocket,bool hasUserPipeFrom,bool hasUserPipeTo,int userPipeFrom);
 
 void PET_init(int pipe_expired_table[PET_SIZE]);
 void PET_iterate(int pipe_expired_table[PET_SIZE]); 
@@ -139,8 +139,9 @@ void sig_usr(int signo);
 int gb_ipcSocket =-1;
 int gb_slaveSocket =-1;
 bool gb_userPipeFromSuccess = false;
-bool gb_userPipeToSuccess = true;
-
+bool gb_userPipeToSuccess = false;
+int gb_openWriteFd =-1;
+int gb_openReadFd[MAX_USERNUMBER] ;
 
 int main(int argc, char *argv[]) {
 	string input ="" ; 
@@ -181,7 +182,9 @@ int main(int argc, char *argv[]) {
 	int userPipeFrom = -1 ; 
 	bool hasUserPipeTo =false;
 	int userPipeTo = -1;
-
+	for(int j=0;j<MAX_USERNUMBER;j++){
+		gb_openReadFd[j] =-1;
+	}
 	// Pipe expired table initialization.
 	PET_init(pipe_expired_table);
 
@@ -357,6 +360,9 @@ int main(int argc, char *argv[]) {
 								cout << "*** Child " << emptyIndex+1 << " says \'" << input <<"\' ***\n" ;
 								
 								// Start to handle the input
+								gb_userPipeToSuccess =false;
+								gb_userPipeFromSuccess =false;
+
 								hasNumberPipe = false;
 								bothStderr = false;
 								pipeAfterLine =0 ;
@@ -460,9 +466,9 @@ int main(int argc, char *argv[]) {
 									// Now we have the number of processes 
 									// we can start to construct the pipe.
 									if(process_count ==1){
-										singleProcess(commandVec,hasNumberPipe,bothStderr,pipeAfterLine,numberPipe,pipe_expired_table,slaveSocket);	
+										singleProcess(commandVec,hasNumberPipe,bothStderr,pipeAfterLine,numberPipe,pipe_expired_table,slaveSocket,hasUserPipeFrom,hasUserPipeTo,userPipeFrom);	
 									}else if(process_count>=2){
-										multiProcess(commandVec,process_count,hasNumberPipe,bothStderr,pipeAfterLine,numberPipe,pipe_expired_table,slaveSocket);	
+										multiProcess(commandVec,process_count,hasNumberPipe,bothStderr,pipeAfterLine,numberPipe,pipe_expired_table,slaveSocket,hasUserPipeFrom,hasUserPipeTo,userPipeFrom);	
 									}		
 								}
 					
@@ -655,7 +661,7 @@ int main(int argc, char *argv[]) {
 								for(int n=0;n<broadcastUserIndex.size();n++){
 									if(broadcastUserIndex[n] == existUserIndex[i]){
 										// userlist[existUserIndex[i]] need to receive from FIFO -> use another signal
-										broadcastMessage= "secretcode_r*** "+userlist[existUserIndex[i]].getName()+" (#"+to_string(userlist[existUserIndex[i]].getId())+") just received from "+userlist[userPipeFrom-1].getName()+" (#"+to_string(userPipeFrom)+") by \'"+input.substr(spaceIndex+1)+"\' ***\n";
+										broadcastMessage= "secretcode_r="+ to_string(userPipeFrom)+"_"+to_string(userlist[existUserIndex[i]].getId()) +"*** "+userlist[existUserIndex[i]].getName()+" (#"+to_string(userlist[existUserIndex[i]].getId())+") just received from "+userlist[userPipeFrom-1].getName()+" (#"+to_string(userPipeFrom)+") by \'"+input.substr(spaceIndex+1)+"\' ***\n";
 										write(userlist[broadcastUserIndex[n]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());	
 										kill(userlist[existUserIndex[i]].getPid(),SIGUSR2);
 									}else{
@@ -704,14 +710,22 @@ int main(int argc, char *argv[]) {
 								for(int n=0;n<broadcastUserIndex.size();n++){
 									if(broadcastUserIndex[n] == existUserIndex[i]){
 										// userlist[existUserIndex[i]] need to write to FIFO -> use another signal
-										broadcastMessage= "secretcode_w*** "+userlist[existUserIndex[i]].getName()+" (#"+to_string(userlist[existUserIndex[i]].getId())+") just piped \'"+input.substr(spaceIndex+1)+"\' to "+userlist[userPipeTo-1].getName()+" (#"+to_string(userPipeTo)+") ***\n";
+										broadcastMessage= "secretcode_w="+to_string(userlist[existUserIndex[i]].getId())+"_"+to_string(userlist[userPipeTo-1].getId())+"*** "+userlist[existUserIndex[i]].getName()+" (#"+to_string(userlist[existUserIndex[i]].getId())+") just piped \'"+input.substr(spaceIndex+1)+"\' to "+userlist[userPipeTo-1].getName()+" (#"+to_string(userPipeTo)+") ***\n";
 										write(userlist[broadcastUserIndex[n]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());	
 										kill(userlist[existUserIndex[i]].getPid(),SIGUSR2);
+
+									}else if(broadcastUserIndex[n] == (userPipeTo-1) ){
+										// also need to remind read side
+										broadcastMessage= "secretcode_o="+to_string(userlist[existUserIndex[i]].getId())+"_"+to_string(userlist[userPipeTo-1].getId())+"*** "+userlist[existUserIndex[i]].getName()+" (#"+to_string(userlist[existUserIndex[i]].getId())+") just piped \'"+input.substr(spaceIndex+1)+"\' to "+userlist[userPipeTo-1].getName()+" (#"+to_string(userPipeTo)+") ***\n";
+										write(userlist[broadcastUserIndex[n]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());	
+										kill(userlist[broadcastUserIndex[n]].getPid(),SIGUSR2);
+
 									}else{
 										// other people just receive the message and show it to client
 										broadcastMessage= "*** "+userlist[existUserIndex[i]].getName()+" (#"+to_string(userlist[existUserIndex[i]].getId())+") just piped \'"+input.substr(spaceIndex+1)+"\' to "+userlist[userPipeTo-1].getName()+" (#"+to_string(userPipeTo)+") ***\n";
 										write(userlist[broadcastUserIndex[n]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());	
 										kill(userlist[broadcastUserIndex[n]].getPid(),SIGUSR1);
+
 									}
 								}
 							}
@@ -725,7 +739,7 @@ int main(int argc, char *argv[]) {
 	return 0;
 }
 // Single process handle 
-void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],int slaveSocket){
+void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],int slaveSocket,bool hasUserPipeFrom,bool hasUserPipeTo,int userPipeFrom){
 	pid_t child_done_pid;
 	int child_done_status;
 	bool needRedirection =false;
@@ -743,11 +757,12 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 		if(commandVec[i].find(">")!= string::npos){
 			// There is a ">" in command
 			// Now we check if there is a file name after ">"
-			if((i+1)<commandVec.size()){
+			if((i+1)<commandVec.size() && commandVec[i].length()==1){
 				needRedirection = true ;
 				redirectionFileName = commandVec[i+1] ;
 				break;
-			}else{
+
+			}else if(commandVec[i].length() ==1 && (i+1)== commandVec.size()){
 				string temp = "syntax error near unexpected token\n" ;
 				cerr << temp ;
 				write(slaveSocket,temp.c_str(),temp.length()) ;
@@ -774,9 +789,13 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
   		cout <<"fork error\n" ;
     }else if(fork_pid ==0){ // Child
    		// handle execvp argument
+		int arg_index =0;
         for(int i=0;i<commandVec.size();i++){
-			if(commandVec[i].find(">")==string::npos && commandVec[i].find("|")==string::npos && commandVec[i].find("!")==string::npos){
-        		arg[i] = strdup(commandVec[i].c_str());
+			if(commandVec[i].find(">")==string::npos && commandVec[i].find("|")==string::npos && commandVec[i].find("!")==string::npos && commandVec[i].find("<")==string::npos){
+        		arg[arg_index] = strdup(commandVec[i].c_str());
+				arg_index ++ ;
+			}else if((commandVec[i].find(">")!=string::npos && commandVec[i].length()>1) || (commandVec[i].find("<")!=string::npos && commandVec[i].length()>1) ){
+				continue ;	
 			}else{
 				//Find ">" or Find "|" : we abort it.
 				break ;
@@ -788,6 +807,17 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 			close(numberPipe[expiredIndex][1]);
 			dup2(numberPipe[expiredIndex][0],STDIN_FILENO);
 			close(numberPipe[expiredIndex][0]);
+		}else if(hasUserPipeFrom ==true){
+			if(gb_userPipeFromSuccess ==true){
+				dup2(gb_openReadFd[userPipeFrom-1],STDIN_FILENO);	
+				close(gb_openReadFd[userPipeFrom-1]);
+				gb_openReadFd[userPipeFrom-1] =-1;
+
+			}else{	
+				int devnull = open("/dev/null",O_RDWR);
+				dup2(devnull,STDIN_FILENO);
+				close(devnull);
+			}
 		}		
 			
 		//if this child need to number pipe to another line
@@ -811,6 +841,22 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 					dup2(numberPipe[pipeToSameLine][1],STDERR_FILENO);
 				}
 			}
+
+		}else if(hasUserPipeTo ==true){
+			// dup socket to STDERR_FILNO
+			dup2(slaveSocket,STDERR_FILENO);
+			close(slaveSocket);
+			
+			if(gb_userPipeToSuccess ==true){
+				dup2(gb_openWriteFd,STDOUT_FILENO);
+				close(gb_openWriteFd);
+
+			}else{
+				int devnull = open("/dev/null",O_RDWR);
+				dup2(devnull,STDOUT_FILENO);
+				close(devnull);
+			}
+
 		}else{
 			// no number pipe -> output to socket
 			dup2(slaveSocket,STDOUT_FILENO);
@@ -825,6 +871,14 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 			close(fd);
 		}
 		
+		//Before execvp -> Child closes useless userPipeFrom
+		for(int i=0;i<MAX_USERNUMBER;i++){
+			if(gb_openReadFd[i] !=-1){
+				close(gb_openReadFd[i]);
+				gb_openReadFd[i] =-1;
+			}
+		}
+
 		//Before execvp -> Child closes the useless number  pipe
 		for(int i=0;i<existPipeIndex.size();i++){
 			close(numberPipe[existPipeIndex[i]][0]);
@@ -843,12 +897,21 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 		if(expiredIndex != -1){
 			close(numberPipe[expiredIndex][0]);
 			close(numberPipe[expiredIndex][1]);
+		}else if(hasUserPipeFrom ==true && gb_userPipeFromSuccess ==true){
+			// Parent need tidy userPipeFrom which is called
+			close(gb_openReadFd[userPipeFrom-1]);
+			gb_openReadFd[userPipeFrom-1] =-1;
+		}
+		
+		// Parent need tidy userPipeTo
+		if(hasUserPipeTo == true && gb_userPipeToSuccess ==true){
+			close(gb_openWriteFd);			
 		}
 
 		// If this command has number Pipe
 		// Parent doesn't need to wait child DONE.
 		// otherwise need to wait.
-		if(hasNumberPipe == true){
+		if(hasNumberPipe == true || hasUserPipeTo ==true){
 			signal(SIGCHLD,wait4children);
 		}else{
 			waitpid(fork_pid,NULL,0);
@@ -858,7 +921,7 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 }
 
 // Multi process handle
-void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],int slaveSocket){
+void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,bool bothStderr,int pipeAfterLine,int numberPipe[PET_SIZE][2],int pipe_expired_table[PET_SIZE],int slaveSocket,bool hasUserPipeFrom,bool hasUserPipeTo,int userPipeFrom){
 	// First handle all of the command and it's argument
 	int process_index =0;
 	int process_cmd_index=0;
@@ -1353,18 +1416,43 @@ void sig_usr(int signo){
 		char buffer[MAX_LENGTH] = {};
 		string input ="";
 		string secretCommand ="";
-
+		string pathName ="";
+		int userPipeFrom = -1;	
 		int readCount = read(gb_ipcSocket,buffer,sizeof(buffer));
+		
 		input = extractClientInput(buffer,readCount);
 		secretCommand = input.substr(0,12);
-		input = input.substr(12);
+		pathName = "./user_pipe/" + input.substr( input.find("=")+1,input.find("*")-input.find("=")-1);
+		userPipeFrom = stoi( input.substr( input.find("=")+1 , input.find("_",12)-input.find("=")-1 ) );
+		input = input.substr(input.find("*"));
 		input +="\n";
-
 		// echo to client
 		write(gb_slaveSocket,input.c_str(),input.length());
 
 		// Now start to handle FIFO -> only child process will execute this function
 		// First check we are FIFO write end / FIFO read end -> via ipcMessage
-		
+		if(secretCommand == "secretcode_w"){
+			gb_userPipeToSuccess =true ;
+			// need to mkfifo & open (also need to some one to open read) 
+			if(mkfifo(pathName.c_str(),0777)<0 && errno != EEXIST ){
+				cout << "Child - secretcode_w can't create:" << pathName <<".\n";
+			}
+			cout << "Child - secretcode_w bf open with pathName: " << pathName << ".\n";
+			gb_openWriteFd = open(pathName.c_str(),O_WRONLY,0);
+			cout << "gb_openWriteFd=" << gb_openWriteFd << " and errno: " << errno <<"\n";
+			cout << "Child - secretcode_w gb_openWriteFd not hanging!\n";
+
+		}else if(secretCommand == "secretcode_o"){
+			// need to help write side of the same file		
+			if(mkfifo(pathName.c_str(),0777)<0 && errno != EEXIST ){
+				cout << "Child - secretcode_o can't create:" << pathName <<".\n";
+			}
+			cout << "Child - secretcode_o bf open with userPipeFrom: " << userPipeFrom <<" and pathName: " << pathName << ".\n";
+			gb_openReadFd[userPipeFrom-1] = open(pathName.c_str(),O_RDONLY,0);
+			cout << "Child - secretcode_o & gb_openReadFd[userPipeFrom-1]=" << gb_openReadFd[userPipeFrom-1]<<" and errno: " << errno<< "\n";
+
+		}else if(secretCommand == "secretcode_r"){
+			gb_userPipeFromSuccess =true ;
+		}		
 	}
 }
