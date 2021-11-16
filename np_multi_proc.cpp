@@ -584,7 +584,7 @@ int main(int argc, char *argv[]) {
 								write(userlist[stoi(target)-1].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());
 								kill(userlist[stoi(target)-1].getPid(),SIGUSR1);
 								
-								string secret = "secretcode001";
+								string secret = "secretcode_ignore";
 								write(userlist[existUserIndex[i]].getIpcSocketfd(),secret.c_str(),secret.length());
 								kill(userlist[existUserIndex[i]].getPid(),SIGUSR1);
 
@@ -646,17 +646,22 @@ int main(int argc, char *argv[]) {
 								kill(userlist[existUserIndex[i]].getPid(),SIGUSR1);
 
 							}else{
-								//success - > broadcast to everyone
-								broadcastMessage= "*** "+userlist[existUserIndex[i]].getName()+" (#"+to_string(userlist[existUserIndex[i]].getId())+") just received from "+userlist[userPipeFrom-1].getName()+" (#"+to_string(userPipeFrom)+") by \'"+input.substr(spaceIndex+1)+"\' ***\n";
-								
+								// success -> parent need to record the information
+								// developHEAD	
+								userlist[existUserIndex[i]].setUserPipeFd(userPipeFrom,-1);
+
+								// success -> broadcast to everyone
 								vector<int> broadcastUserIndex = existUser(userlist);
 								for(int n=0;n<broadcastUserIndex.size();n++){
-									write(userlist[broadcastUserIndex[n]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());	
 									if(broadcastUserIndex[n] == existUserIndex[i]){
 										// userlist[existUserIndex[i]] need to receive from FIFO -> use another signal
+										broadcastMessage= "secretcode_r*** "+userlist[existUserIndex[i]].getName()+" (#"+to_string(userlist[existUserIndex[i]].getId())+") just received from "+userlist[userPipeFrom-1].getName()+" (#"+to_string(userPipeFrom)+") by \'"+input.substr(spaceIndex+1)+"\' ***\n";
+										write(userlist[broadcastUserIndex[n]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());	
 										kill(userlist[existUserIndex[i]].getPid(),SIGUSR2);
 									}else{
 										// other people just receive the message and show it to client
+										broadcastMessage= "*** "+userlist[existUserIndex[i]].getName()+" (#"+to_string(userlist[existUserIndex[i]].getId())+") just received from "+userlist[userPipeFrom-1].getName()+" (#"+to_string(userPipeFrom)+") by \'"+input.substr(spaceIndex+1)+"\' ***\n";
+										write(userlist[broadcastUserIndex[n]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());	
 										kill(userlist[broadcastUserIndex[n]].getPid(),SIGUSR1);
 									}
 								}
@@ -690,17 +695,22 @@ int main(int argc, char *argv[]) {
 								kill(userlist[existUserIndex[i]].getPid(),SIGUSR1);
 
 							}else{
-								//success - > broadcast to everyone
-								broadcastMessage= "*** "+userlist[existUserIndex[i]].getName()+" (#"+to_string(userlist[existUserIndex[i]].getId())+") just piped \'"+input.substr(spaceIndex+1)+"\' to "+userlist[userPipeTo-1].getName()+" (#"+to_string(userPipeTo)+") ***\n";
-								
+								// success -> parent need to record the information
+								// developHEAD
+								userlist[userPipeTo-1].setUserPipeFd(userlist[existUserIndex[i]].getId(),1);	
+
+								// success -> broadcast to everyone
 								vector<int> broadcastUserIndex = existUser(userlist);
 								for(int n=0;n<broadcastUserIndex.size();n++){
-									write(userlist[broadcastUserIndex[n]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());	
 									if(broadcastUserIndex[n] == existUserIndex[i]){
 										// userlist[existUserIndex[i]] need to write to FIFO -> use another signal
+										broadcastMessage= "secretcode_w*** "+userlist[existUserIndex[i]].getName()+" (#"+to_string(userlist[existUserIndex[i]].getId())+") just piped \'"+input.substr(spaceIndex+1)+"\' to "+userlist[userPipeTo-1].getName()+" (#"+to_string(userPipeTo)+") ***\n";
+										write(userlist[broadcastUserIndex[n]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());	
 										kill(userlist[existUserIndex[i]].getPid(),SIGUSR2);
 									}else{
 										// other people just receive the message and show it to client
+										broadcastMessage= "*** "+userlist[existUserIndex[i]].getName()+" (#"+to_string(userlist[existUserIndex[i]].getId())+") just piped \'"+input.substr(spaceIndex+1)+"\' to "+userlist[userPipeTo-1].getName()+" (#"+to_string(userPipeTo)+") ***\n";
+										write(userlist[broadcastUserIndex[n]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());	
 										kill(userlist[broadcastUserIndex[n]].getPid(),SIGUSR1);
 									}
 								}
@@ -1332,7 +1342,7 @@ void sig_usr(int signo){
 		input += "\n";
 		
 		// echo to client
-		if(input.substr(0,input.length()-1) != "secretcode001"){
+		if(input.substr(0,input.length()-1) != "secretcode_ignore"){
 			write(gb_slaveSocket,input.c_str(),input.length());
 		}
 
@@ -1342,16 +1352,19 @@ void sig_usr(int signo){
 		cout << "sig_usr: SIGUSR2\n";
 		char buffer[MAX_LENGTH] = {};
 		string input ="";
+		string secretCommand ="";
 
 		int readCount = read(gb_ipcSocket,buffer,sizeof(buffer));
 		input = extractClientInput(buffer,readCount);
+		secretCommand = input.substr(0,12);
+		input = input.substr(12);
 		input +="\n";
 
 		// echo to client
 		write(gb_slaveSocket,input.c_str(),input.length());
 
 		// Now start to handle FIFO -> only child process will execute this function
-		// First check we are FIFO write end / FIFO read end
+		// First check we are FIFO write end / FIFO read end -> via ipcMessage
 		
 	}
 }
