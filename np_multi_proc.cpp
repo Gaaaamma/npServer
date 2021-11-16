@@ -385,6 +385,13 @@ int main(int argc, char *argv[]) {
 								if(commandVec.size()!=0 && commandVec[0]=="exit"){
 									// broadcast to everyone that you left
 									// just leave -> ipcSocket will be closed -> Parent will know we leave and handle logoutMessage.
+									// the only thing need to do is to close all the gb_openRd
+									for(int k=0;k<MAX_USERNUMBER;k++){
+										if(gb_openReadFd[k]!= -1){
+											close(gb_openReadFd[k]);
+											gb_openReadFd[k] =-1;
+										}
+									}
 									break ;
 								}else if(commandVec.size()!=0 && commandVec[0]=="printenv"){
 									if(commandVec.size()==2){
@@ -503,11 +510,12 @@ int main(int argc, char *argv[]) {
 						cout <<userlist[existUserIndex[i]].getId()<<"\'s process dead\n"; 	
 
 						// broadcast to everyone userlist[existUserIndex[i]] left ,Except user who send this message ;
-						string broadcastMessage = "*** User \'"+userlist[existUserIndex[i]].getName()+ "\' left. ***\n";
+						string broadcastMessage = "secretcode_d"+to_string(userlist[existUserIndex[i]].getId())+"*** User \'"+userlist[existUserIndex[i]].getName()+ "\' left. ***\n";
 						vector<int> broadcastUserIndex = existUser(userlist);
 						for(int n=0; n<broadcastUserIndex.size() ; n++){
 							if(existUserIndex[i] != broadcastUserIndex[n]){ // except who send this message
 								write(userlist[broadcastUserIndex[n]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());
+								userlist[broadcastUserIndex[n]].setUserPipeFd(userlist[existUserIndex[i]].getId(),-1);
 								kill(userlist[broadcastUserIndex[n]].getPid(),SIGUSR1);
 							}
 						}
@@ -1398,13 +1406,36 @@ void sig_usr(int signo){
 		// DEFINE : receive from Parent and echo to client
 		char buffer[MAX_LENGTH] = {};	
 		string input = "";
+		bool someoneDead =false;
+		int deadId =-1;
 
 		// receive message from Parent
 		int readCount = read(gb_ipcSocket,buffer,sizeof(buffer));
 		input = extractClientInput(buffer,readCount);
+		
+		// Dead check
+		if(input.substr(0,12)=="secretcode_d" && input.find("left")!=string::npos){
+			someoneDead =true;
+			for(int k=12;k<input.length();k++){
+				if(input[k] =='*'){
+					deadId = stoi(input.substr(12,k-12));
+					input = input.substr(k);
+					break;
+				}
+			}
+		}
+		
 		input += "\n";
 		
 		// echo to client
+		if(someoneDead ==true){
+			// clear this userPipe
+			if(gb_openReadFd[deadId-1] != -1){
+				close(gb_openReadFd[deadId-1]);
+				gb_openReadFd[deadId-1] = -1;
+			}
+		}
+
 		if(input.substr(0,input.length()-1) != "secretcode_ignore"){
 			write(gb_slaveSocket,input.c_str(),input.length());
 		}
