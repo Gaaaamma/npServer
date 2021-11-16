@@ -809,6 +809,7 @@ void singleProcess(vector<string> commandVec,bool hasNumberPipe,bool bothStderr,
 				break ;
 			}
       	}
+
 		//if there is number pipe expired
 		if(expiredIndex != -1){
 			// set pipe to STDIN and close the pipe
@@ -954,11 +955,18 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 				process_index ++;
 				process_cmd_index =0 ;
 			}
+		}else if(commandVec[cmd_index].find("<")!= string::npos){
+			continue;
+
 		}else if(commandVec[cmd_index].find(">")!= string::npos){ //Find > in this string
-			if((cmd_index+1) < commandVec.size()){ 
+			if((cmd_index+1) < commandVec.size() && commandVec[cmd_index].length() ==1){ 
 				needRedirection = true ;
 				redirectionFileName = commandVec[cmd_index+1];
 				break ;
+
+			}else if(commandVec[cmd_index].length() >1){
+				continue ;
+
 			}else{
 				string temp = "syntax error near unexpected token\n";
 				cerr << temp;
@@ -990,6 +998,18 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 				close(numberPipe[expiredIndex][1]);
 				dup2(numberPipe[expiredIndex][0],STDIN_FILENO);
 				close(numberPipe[expiredIndex][0]);
+
+			}else if(hasUserPipeFrom ==true){		
+				if(gb_userPipeFromSuccess ==true){
+					dup2(gb_openReadFd[userPipeFrom-1],STDIN_FILENO);	
+					close(gb_openReadFd[userPipeFrom-1]);
+					gb_openReadFd[userPipeFrom-1] =-1;
+
+				}else{	
+					int devnull = open("/dev/null",O_RDWR);
+					dup2(devnull,STDIN_FILENO);
+					close(devnull);
+				}
 			}		
 
 			// Child1 need to modify the stdout
@@ -1001,6 +1021,21 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 			// But STDERR may need it so -> dup to STDERR
 			dup2(slaveSocket,STDERR_FILENO);
 			close(slaveSocket);
+
+			//Before execvp -> Child closes useless userPipeFrom
+			for(int i=0;i<MAX_USERNUMBER;i++){
+				if(gb_openReadFd[i] !=-1){
+					close(gb_openReadFd[i]);
+					gb_openReadFd[i] =-1;
+				}
+			}
+
+			// since first child doesn't need userPipeTo
+			if(hasUserPipeTo ==true && gb_userPipeToSuccess ==true){
+				if(gb_openWriteFd != -1){
+					close(gb_openWriteFd);
+				}			
+			}
 
 			// Before execvp -> close useless number Pipe
 			for(int i=0;i<existPipeIndex.size();i++){
@@ -1020,6 +1055,10 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 			if(expiredIndex != -1){
 				close(numberPipe[expiredIndex][0]);
 				close(numberPipe[expiredIndex][1]);
+			}else if(hasUserPipeFrom ==true && gb_userPipeFromSuccess ==true){		
+				// Parent need tidy userPipeFrom which is called
+				close(gb_openReadFd[userPipeFrom-1]);
+				gb_openReadFd[userPipeFrom-1] =-1;
 			}
 
 			// If this command need to number pipe
@@ -1062,6 +1101,22 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 							dup2(numberPipe[pipeToSameLine][1],STDERR_FILENO);
 						}
 					}
+
+				}else if(hasUserPipeTo ==true){			
+					// dup socket to STDERR_FILNO
+					dup2(slaveSocket,STDERR_FILENO);
+					close(slaveSocket);
+					
+					if(gb_userPipeToSuccess ==true){
+						dup2(gb_openWriteFd,STDOUT_FILENO);
+						close(gb_openWriteFd);
+
+					}else{
+						int devnull = open("/dev/null",O_RDWR);
+						dup2(devnull,STDOUT_FILENO);
+						close(devnull);
+					}
+
 				}else{
 					// no number pipi -> output to socket
 					dup2(slaveSocket,STDOUT_FILENO);
@@ -1075,6 +1130,13 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
      				close(fd);
 				}
 				
+				//Before execvp -> Child closes useless userPipeFrom
+				for(int i=0;i<MAX_USERNUMBER;i++){
+					if(gb_openReadFd[i] !=-1){
+						close(gb_openReadFd[i]);
+						gb_openReadFd[i] =-1;
+					}
+				}
 				// Before execvp -> close useless number pipe
 				for(int i=0;i<existPipeIndex.size();i++){
 					close(numberPipe[existPipeIndex[i]][0]);
@@ -1091,7 +1153,13 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 				close(mPipe[0][0]);
 				close(mPipe[0][1]);				
 
-				if(hasNumberPipe == true){
+				// Parent need tidy userPipeTo
+				if(hasUserPipeTo == true && gb_userPipeToSuccess ==true){
+					close(gb_openWriteFd);			
+					gb_openWriteFd =-1;
+				}
+
+				if(hasNumberPipe == true || hasUserPipeTo ==true){
 					// Needless to wait the process
 					signal(SIGCHLD,wait4children);
 				}else{
@@ -1114,6 +1182,18 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 				close(numberPipe[expiredIndex][1]);
 				dup2(numberPipe[expiredIndex][0],STDIN_FILENO);
 				close(numberPipe[expiredIndex][0]);
+
+			}else if(hasUserPipeFrom ==true){		
+				if(gb_userPipeFromSuccess ==true){
+					dup2(gb_openReadFd[userPipeFrom-1],STDIN_FILENO);	
+					close(gb_openReadFd[userPipeFrom-1]);
+					gb_openReadFd[userPipeFrom-1] =-1;
+
+				}else{	
+					int devnull = open("/dev/null",O_RDWR);
+					dup2(devnull,STDIN_FILENO);
+					close(devnull);
+				}
 			}
 
 			// Child1 need to modify the stdout
@@ -1125,12 +1205,25 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 			dup2(slaveSocket,STDERR_FILENO);
 			close(slaveSocket);
 
+			//Before execvp -> Child closes useless userPipeFrom
+			for(int i=0;i<MAX_USERNUMBER;i++){
+				if(gb_openReadFd[i] !=-1){
+					close(gb_openReadFd[i]);
+					gb_openReadFd[i] =-1;
+				}
+			}
 			// Before execvp -> close useless number Pipe
 			for(int i=0;i<existPipeIndex.size();i++){
 				close(numberPipe[existPipeIndex[i]][0]);
 				close(numberPipe[existPipeIndex[i]][1]);
 			}
 
+			// since first child doesn't need userPipeTo
+			if(hasUserPipeTo ==true && gb_userPipeToSuccess ==true){
+				if(gb_openWriteFd != -1){
+					close(gb_openWriteFd);
+				}			
+			}
 			// Ready to execvp
 			if(execvp(arg[process_index][0],arg[process_index]) == -1){
 				string temp = "Unknown command: [" + string(arg[process_index][0]) + "].\n";
@@ -1147,6 +1240,10 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 			if(expiredIndex != -1){
 				close(numberPipe[expiredIndex][0]);
 				close(numberPipe[expiredIndex][1]);
+			}else if(hasUserPipeFrom ==true && gb_userPipeFromSuccess ==true){
+				// Parent need tidy userPipeFrom which is called
+				close(gb_openReadFd[userPipeFrom-1]);
+				gb_openReadFd[userPipeFrom-1] =-1;
 			}
 
 			// Handle Process 2,3,4,5,....,n-1 in the middle.
@@ -1170,12 +1267,25 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 					dup2(slaveSocket,STDERR_FILENO);
 					close(slaveSocket);
 
+					//Before execvp -> Child closes useless userPipeFrom
+					for(int i=0;i<MAX_USERNUMBER;i++){
+						if(gb_openReadFd[i] !=-1){
+							close(gb_openReadFd[i]);
+							gb_openReadFd[i] =-1;
+						}
+					}
 					// Before execvp -> close useless number pipe
 					for(int i=0;i<existPipeIndex.size();i++){
 						close(numberPipe[existPipeIndex[i]][0]);
 						close(numberPipe[existPipeIndex[i]][1]);
 					}
 
+					// since middle child doesn't need userPipeTo
+					if(hasUserPipeTo ==true && gb_userPipeToSuccess ==true){
+						if(gb_openWriteFd != -1){
+							close(gb_openWriteFd);
+						}			
+					}
 					// Ready to execvp
 					if(execvp(arg[process_index][0],arg[process_index])==-1){
 						cerr <<"Unknown command: ["<<arg[process_index][0] <<"].\n";
@@ -1232,6 +1342,22 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 							dup2(numberPipe[pipeToSameLine][1],STDERR_FILENO);
 						}
 					}
+					
+				}else if(hasUserPipeTo ==true){
+					// dup socket to STDERR_FILNO
+					dup2(slaveSocket,STDERR_FILENO);
+					close(slaveSocket);
+					
+					if(gb_userPipeToSuccess ==true){
+						dup2(gb_openWriteFd,STDOUT_FILENO);
+						close(gb_openWriteFd);
+
+					}else{
+						int devnull = open("/dev/null",O_RDWR);
+						dup2(devnull,STDOUT_FILENO);
+						close(devnull);
+					}
+					
 				}else{
 					// no number pipe -> output to socket
 					dup2(slaveSocket,STDOUT_FILENO);
@@ -1249,6 +1375,13 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
      				close(fd);
 				}
 
+				//Before execvp -> Child closes useless userPipeFrom
+				for(int i=0;i<MAX_USERNUMBER;i++){
+					if(gb_openReadFd[i] !=-1){
+						close(gb_openReadFd[i]);
+						gb_openReadFd[i] =-1;
+					}
+				}
 				// Before execvp -> close useless number pipe
 				for(int i=0;i<existPipeIndex.size();i++){
 					close(numberPipe[existPipeIndex[i]][0]);
@@ -1265,9 +1398,16 @@ void multiProcess(vector<string>commandVec,int process_count,bool hasNumberPipe,
 				// Close front pipe.
 				close(mPipe[(process_index-1)%2][0]);
 				close(mPipe[(process_index-1)%2][1]);
+
+				// Parent need tidy userPipeTo
+				if(hasUserPipeTo == true && gb_userPipeToSuccess ==true){
+					close(gb_openWriteFd);			
+					gb_openWriteFd =-1;
+				}
+
 				// Last process we can use wait -> SHELL will stop here
 				// Until the last process done
-				if(hasNumberPipe ==true){
+				if(hasNumberPipe ==true || hasUserPipeTo ==true){
 					// needless to wait
 					signal(SIGCHLD,wait4children);
 				}else{
