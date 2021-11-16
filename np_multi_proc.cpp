@@ -37,6 +37,7 @@ private:
 	string name ;
 	string ipAddress ;
 	int port ;
+	int userPipeFd[MAX_USERNUMBER];
 
 public:
 	User(){
@@ -50,6 +51,7 @@ public:
 		name = "(no name)";
 		ipAddress = "";
 		port = -1;
+		userPipeFdInit();
 	}
 
 	bool getAvailable(){
@@ -57,6 +59,18 @@ public:
 	}
 	void setAvailable(bool available){
 		this -> available = available;
+	}
+
+	void userPipeFdInit(){
+		for(int i=0;i<MAX_USERNUMBER;i++){
+			userPipeFd[i] =-1;
+		}
+	}
+	int getUserPipeFd(int id){
+		return userPipeFd[id-1];
+	}
+	void setUserPipeFd(int id,int fd){
+		userPipeFd[id-1] = fd ;
 	}
 
 	int getIpcSocketfd(){
@@ -124,6 +138,9 @@ void sig_usr(int signo);
 
 int gb_ipcSocket =-1;
 int gb_slaveSocket =-1;
+bool gb_userPipeFromSuccess = false;
+bool gb_userPipeToSuccess = true;
+
 
 int main(int argc, char *argv[]) {
 	string input ="" ; 
@@ -156,9 +173,14 @@ int main(int argc, char *argv[]) {
 	int nfdp = getdtablesize();
 	FD_ZERO(&rfds);
 	FD_ZERO(&afds);
-	
 	int ipcSocket,ipcSlaveSocket =-1;
 	struct sockaddr_un unSAddr;
+	
+	// userPipe setting
+	bool hasUserPipeFrom = false;
+	int userPipeFrom = -1 ; 
+	bool hasUserPipeTo =false;
+	int userPipeTo = -1;
 
 	// Pipe expired table initialization.
 	PET_init(pipe_expired_table);
@@ -268,6 +290,8 @@ int main(int argc, char *argv[]) {
 						// for child -> reset global variable:  gb_slaveSocket and set singal handler
 						gb_slaveSocket = slaveSocket ;
 						signal(SIGUSR1,sig_usr);
+						signal(SIGUSR2,sig_usr);
+
 						// close useless socket and users except "itself" !!
 						close(masterSocket);
 						vector<int> existUserIndex = existUser(userlist);
@@ -313,8 +337,7 @@ int main(int argc, char *argv[]) {
 						pause(); 
 
 						// (3) prompt
-						write(slaveSocket,promptString.c_str(),promptString.length());
-
+						write(slaveSocket,promptString.c_str(),promptString.length());	
 						// wait for client input.
 						while(true){		
 							readCount = read(slaveSocket,buffer,sizeof(buffer));
@@ -337,7 +360,12 @@ int main(int argc, char *argv[]) {
 								hasNumberPipe = false;
 								bothStderr = false;
 								pipeAfterLine =0 ;
-					
+	
+								hasUserPipeFrom = false;
+								hasUserPipeTo =false ;
+								userPipeFrom =-1;
+								userPipeTo =-1;
+
 								ss << input ;
 					    		while (ss >> aWord) {
 									commandVec.push_back(aWord);
@@ -385,7 +413,6 @@ int main(int argc, char *argv[]) {
 									pause();
 
 								}else if(commandVec.size()!=0){ // The last condition is not empty.
-									// Not the three built-in command
 									// Ready to handle the command. 
 					
 									// We want to know how much process need to call fork()
@@ -404,9 +431,32 @@ int main(int argc, char *argv[]) {
 					    	  				hasNumberPipe = true;
 											bothStderr = true;
 											pipeAfterLine = stoi(commandVec[i].substr(1)) ;
+										}else if(commandVec[i].find("<") != string::npos && commandVec[i].length() >1){
+											// find <id userPipeFrom
+											hasUserPipeFrom = true;
+											userPipeFrom = stoi(commandVec[i].substr(1));
+
+										}else if(commandVec[i].find(">") != string::npos && commandVec[i].length() >1){
+											// find >id userPipeTo
+											hasUserPipeTo =true ;
+											userPipeTo = stoi(commandVec[i].substr(1));
+
 										}
 									} 
 									
+									// judge userPipeFrom & userPipeTo
+									// Ask Parent to check if this command is legal or not.
+									if(hasUserPipeFrom == true){
+										string sendMessage = "<"+to_string(userPipeFrom)+" "+input ; 
+										write(ipcSocket,sendMessage.c_str(),sendMessage.length());	
+										pause();
+									}
+									if(hasUserPipeTo == true){
+										string sendMessage = ">"+to_string(userPipeTo)+" "+input ;
+										write(ipcSocket,sendMessage.c_str(),sendMessage.length());	
+										pause();
+									}
+
 									// Now we have the number of processes 
 									// we can start to construct the pipe.
 									if(process_count ==1){
@@ -569,8 +619,93 @@ int main(int argc, char *argv[]) {
 							cout << broadcastMessage ;
 							write(userlist[existUserIndex[i]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());
 							kill(userlist[existUserIndex[i]].getPid(),SIGUSR1);
-						}
+						}else if(input[0] == '<' && input.length() >1){
+							// get Ask from child process -> userPipeFrom 
+							hasUserPipeFrom = true;
+							int spaceIndex = -1;
+							for(int k=0;k<input.length();k++){
+								if(input[k] ==' '){
+									spaceIndex = k ;
+									break;
+								}
+							}
+							userPipeFrom = stoi(input.substr(1,spaceIndex-1));
+							string broadcastMessage = "";
 
+							// check if this command is legal
+							if(userPipeFrom >30 || userlist[userPipeFrom-1].getAvailable() ==false){
+								// user does not exist
+								broadcastMessage ="*** Error: user #" + to_string(userPipeFrom) + " does not exist yet. ***\n";
+								write(userlist[existUserIndex[i]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());
+								kill(userlist[existUserIndex[i]].getPid(),SIGUSR1);
+
+							}else if(userPipeFrom <=30 && userlist[userPipeFrom-1].getAvailable() ==true && userlist[existUserIndex[i]].getUserPipeFd(userPipeFrom) ==-1){
+								// userPipe does not exist yet.
+								broadcastMessage ="*** Error: the pipe #"+to_string(userPipeFrom)+"->#"+to_string(userlist[existUserIndex[i]].getId())+" does not exist yet. ***\n";
+								write(userlist[existUserIndex[i]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());
+								kill(userlist[existUserIndex[i]].getPid(),SIGUSR1);
+
+							}else{
+								//success - > broadcast to everyone
+								broadcastMessage= "*** "+userlist[existUserIndex[i]].getName()+" (#"+to_string(userlist[existUserIndex[i]].getId())+") just received from "+userlist[userPipeFrom-1].getName()+" (#"+to_string(userPipeFrom)+") by \'"+input.substr(spaceIndex+1)+"\' ***\n";
+								
+								vector<int> broadcastUserIndex = existUser(userlist);
+								for(int n=0;n<broadcastUserIndex.size();n++){
+									write(userlist[broadcastUserIndex[n]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());	
+									if(broadcastUserIndex[n] == existUserIndex[i]){
+										// userlist[existUserIndex[i]] need to receive from FIFO -> use another signal
+										kill(userlist[existUserIndex[i]].getPid(),SIGUSR2);
+									}else{
+										// other people just receive the message and show it to client
+										kill(userlist[broadcastUserIndex[n]].getPid(),SIGUSR1);
+									}
+								}
+
+							}
+
+						}else if(input[0] == '>' && input.length() >1){
+							// get Ask from child process -> userPipeTo
+							hasUserPipeTo = true;
+							int spaceIndex = -1;
+							for(int k=0;k<input.length();k++){
+								if(input[k] ==' '){
+									spaceIndex = k ;
+									break;
+								}
+							}
+							userPipeTo = stoi(input.substr(1,spaceIndex-1));
+							string broadcastMessage = "";
+
+							// check if this command is legal
+							if(userPipeTo >30 || userlist[userPipeTo-1].getAvailable() ==false){
+								// user does not exist
+								broadcastMessage ="*** Error: user #" + to_string(userPipeTo) + " does not exist yet. ***\n";
+								write(userlist[existUserIndex[i]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());
+								kill(userlist[existUserIndex[i]].getPid(),SIGUSR1);
+
+							}else if(userPipeTo <=30 && userlist[userPipeTo-1].getAvailable() ==true && userlist[userPipeTo-1].getUserPipeFd(userlist[existUserIndex[i]].getId()) != -1){
+								// userPipe already exist yet.
+								broadcastMessage ="*** Error: the pipe #"+to_string(userlist[existUserIndex[i]].getId())+"->#"+to_string(userPipeTo)+" already exists. ***\n";
+								write(userlist[existUserIndex[i]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());
+								kill(userlist[existUserIndex[i]].getPid(),SIGUSR1);
+
+							}else{
+								//success - > broadcast to everyone
+								broadcastMessage= "*** "+userlist[existUserIndex[i]].getName()+" (#"+to_string(userlist[existUserIndex[i]].getId())+") just piped \'"+input.substr(spaceIndex+1)+"\' to "+userlist[userPipeTo-1].getName()+" (#"+to_string(userPipeTo)+") ***\n";
+								
+								vector<int> broadcastUserIndex = existUser(userlist);
+								for(int n=0;n<broadcastUserIndex.size();n++){
+									write(userlist[broadcastUserIndex[n]].getIpcSocketfd(),broadcastMessage.c_str(),broadcastMessage.length());	
+									if(broadcastUserIndex[n] == existUserIndex[i]){
+										// userlist[existUserIndex[i]] need to write to FIFO -> use another signal
+										kill(userlist[existUserIndex[i]].getPid(),SIGUSR2);
+									}else{
+										// other people just receive the message and show it to client
+										kill(userlist[broadcastUserIndex[n]].getPid(),SIGUSR1);
+									}
+								}
+							}
+						}
 					}
 				}
 			}
@@ -1186,7 +1321,7 @@ void wait4children(int signo){
 
 void sig_usr(int signo){
 	if(signo == SIGUSR1){
-		cout << "sig_usr interrupt ! With signo: SIGUSR1\n";
+		cout << "sig_usr: SIGUSR1\n";
 		// DEFINE : receive from Parent and echo to client
 		char buffer[MAX_LENGTH] = {};	
 		string input = "";
@@ -1195,13 +1330,28 @@ void sig_usr(int signo){
 		int readCount = read(gb_ipcSocket,buffer,sizeof(buffer));
 		input = extractClientInput(buffer,readCount);
 		input += "\n";
-
+		
 		// echo to client
 		if(input.substr(0,input.length()-1) != "secretcode001"){
 			write(gb_slaveSocket,input.c_str(),input.length());
 		}
 
 	}else if(signo == SIGUSR2){
-		//do thing 	
+		// use for user Pipe handling
+		// first also need to receive message from Parent and echo to client
+		cout << "sig_usr: SIGUSR2\n";
+		char buffer[MAX_LENGTH] = {};
+		string input ="";
+
+		int readCount = read(gb_ipcSocket,buffer,sizeof(buffer));
+		input = extractClientInput(buffer,readCount);
+		input +="\n";
+
+		// echo to client
+		write(gb_slaveSocket,input.c_str(),input.length());
+
+		// Now start to handle FIFO -> only child process will execute this function
+		// First check we are FIFO write end / FIFO read end
+		
 	}
 }
